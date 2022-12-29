@@ -1,7 +1,7 @@
 import { App, Plugin, MarkdownPostProcessor, MarkdownSectionInformation, PluginSettingTab, Setting } from 'obsidian';
 
 export default class DefinitionListPlugin extends Plugin {
-	private readonly definitionMarker: RegExp = /^\n?:   /;
+	private static readonly definitionMarker: RegExp = /^\n?:   /;
 	
 	onInit() {}
 
@@ -35,7 +35,7 @@ export default class DefinitionListPlugin extends Plugin {
 				}
 				const clone = node.cloneNode(true);
 				if (startOfLine) {
-					const matchDef = node.textContent.match(this.definitionMarker);
+					const matchDef = node.textContent.match(DefinitionListPlugin.definitionMarker);
 					if (matchDef) {
 						itemElement = defList.createEl('dd');
 						clone.textContent = node.textContent.slice(matchDef[0].length);
