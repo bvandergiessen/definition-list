@@ -1,15 +1,13 @@
 import { App, Plugin, MarkdownPostProcessor, MarkdownSectionInformation, PluginSettingTab, Setting } from 'obsidian';
 
 export default class DefinitionListPlugin extends Plugin {
-	onInit() {
-
-	}
+	private readonly definitionMarker: RegExp = /^\n?:   /;
+	
+	onInit() {}
 
 	onload() {
 		console.log('Loading plugin Definition List');
-
 		this.registerMarkdownPostProcessor(this.formatDefinitionLists, 99);
-
 		this.addSettingTab(new SampleSettingTab(this.app, this));
 	}
 
@@ -20,27 +18,24 @@ export default class DefinitionListPlugin extends Plugin {
 		 *  - when the document first enters Reading view: on every child-div of page div
 		 */ 
 		
-		const definitionMarker = /^\n?:   /;
-		
 		// TODO: return a promise
 		
-		// Find direct descendants of type paragraph
+		// Find direct descendants of type paragraph. Return as soon as possible.
 		element.findAll(':scope > p').forEach(par => {
 			if (!par.innerHTML.includes('<br>\n:   ')) return;
 			
 			// create the <dl> element that is to replace the paragraph element
 			const defList = document.createElement('dl');
-			const lineBreaks = par.findAll(':scope > br') as Node[];
 			let startOfLine: boolean = true;
 			let itemElement: HTMLElement;
 			par.childNodes.forEach(node => {
-				if (lineBreaks.includes(node)) {
+				if ('tagName' in node && node.tagName === "BR") {
 					startOfLine = true;
 					return;
 				}
 				const clone = node.cloneNode(true);
 				if (startOfLine) {
-					const matchDef = node.textContent.match(definitionMarker);
+					const matchDef = node.textContent.match(this.definitionMarker);
 					if (matchDef) {
 						itemElement = defList.createEl('dd');
 						clone.textContent = node.textContent.slice(matchDef[0].length);
