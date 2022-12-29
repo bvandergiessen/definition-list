@@ -1,0 +1,16 @@
+/* <dl> element and its <dt> and <dd> children */
+
+dt {
+	font-weight: bold;
+	color: #557;
+}
+
+dd {
+	margin-inline-start: 30px;
+}
+
+dd ul {
+	margin-block: 0;
+}
+
+

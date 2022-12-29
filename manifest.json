@@ -1,0 +1,8 @@
+{
+  "id": "definition-list",
+  "name": "Definition list",
+  "version": "1.0.0",
+  "description": "Create a Definition list <dl> as in PHP Markdown Extra",
+  "author": "BvdG",
+  "isDesktopOnly": false
+}
