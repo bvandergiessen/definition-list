@@ -7,12 +7,11 @@ A definition list consists of one or more *term* – *definition* pairs. The ter
 
 ```
 cryosphere
-:   the **frozen** part of earth's surface (ice and snow): Antarctica, Greenland, ice caps,
-glaciers, permafrost, ice shelfs
+:   the **frozen** part of earth's surface (ice and snow): Antarctica, Greenland, ice caps, glaciers, permafrost, ice shelfs
 climate sensitivity $\lambda$
 :   how much the temperature changes in reaction to radiative forcing
-:   or, how much the temperature will have changed when the $\ce{CO2}$ concentration has
-*doubled* from its pre-industrial value of 280 ppm.
+:   or, how much the temperature will have changed when the $\ce{CO2}$
+concentration has *doubled* from its pre-industrial value of 280 ppm.
 ice shelf
 :   ice that has slid into the sea from land
 ```
