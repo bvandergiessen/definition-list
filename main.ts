@@ -6,7 +6,7 @@ export default class DefinitionListPlugin extends Plugin {
 	onInit() {}
 
 	onload() {
-		console.log('Loading plugin Definition List');
+		console.log(`Loading plugin Definition List v${this.manifest.version}`);
 		this.registerMarkdownPostProcessor(this.formatDefinitionLists, 99);
 		this.addSettingTab(new SampleSettingTab(this.app, this));
 	}
@@ -18,38 +18,53 @@ export default class DefinitionListPlugin extends Plugin {
 		 *  - when the document first enters Reading view: on every child-div of page div
 		 */ 
 		
-		// TODO: return a promise
+		/* In direct descendants of type paragraph, look for definition lists.
+		 * Return as soon as possible.  */
+		const paragraphs = element.findAll(':scope > p');
+		let nothingToDo = true;
+		for (let par of paragraphs)
+			if (par.innerHTML.includes('<br>\n:   ')) {
+				nothingToDo = false;
+				break;
+			}
+		if (nothingToDo) return;
 		
-		// Find direct descendants of type paragraph. Return as soon as possible.
-		element.findAll(':scope > p').forEach(par => {
-			if (!par.innerHTML.includes('<br>\n:   ')) return;
+		return new Promise((resultCallback: (v: any) => void, errorCallback) => {		
+		// TODO: some error checking
+			paragraphs.forEach(par => {
+				if (!par.innerHTML.includes('<br>\n:   ')) return;
 			
-			// create the <dl> element that is to replace the paragraph element
-			const defList = document.createElement('dl');
-			let startOfLine: boolean = true;
-			let itemElement: HTMLElement;
-			par.childNodes.forEach(node => {
-				if ('tagName' in node && node.tagName === "BR") {
-					startOfLine = true;
-					return;
-				}
-				const clone = node.cloneNode(true);
-				if (startOfLine) {
-					const matchDef = node.textContent.match(DefinitionListPlugin.definitionMarker);
-					if (matchDef) {
-						itemElement = defList.createEl('dd');
-						clone.textContent = node.textContent.slice(matchDef[0].length);
+				// create the <dl> element that is to replace the paragraph element
+				const defList = document.createElement('dl');
+				let startOfLine: boolean = true;
+				let itemElement: HTMLElement;
+				
+				// fill the new <dl> with clones of the nodes in the original <p>
+				par.childNodes.forEach(node => {
+					if ('tagName' in node && node.tagName === "BR") {
+						startOfLine = true;
+						return;
 					}
-					else {
-						itemElement = defList.createEl('dt');					
+					const clone = node.cloneNode(true);
+					if (startOfLine) {
+						const matchDef = node.textContent.match(DefinitionListPlugin.definitionMarker);
+						if (matchDef) {
+							itemElement = defList.createEl('dd');
+							clone.textContent = node.textContent.slice(matchDef[0].length);
+						}
+						else {
+							itemElement = defList.createEl('dt');					
+						}
+						startOfLine = false;
 					}
-					startOfLine = false;
-				}
-				itemElement.append(clone);
+					itemElement.append(clone);
+				})
+				
+				// put the <dl> in place of the <p>
+				element.replaceChild(defList, par);
 			})
-			element.replaceChild(defList, par);
+			resultCallback(null);
 		})
-		return;
 	}
 	
 	onunload() {
