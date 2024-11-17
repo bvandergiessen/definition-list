@@ -20,7 +20,7 @@ export default class DefinitionListPlugin extends Plugin {
 		
 		/* In direct descendants of type paragraph, look for definition lists.
 		 * Return as soon as possible.  */
-		const paragraphs = element.findAll(':scope > p');
+		const paragraphs = element.findAll(':scope > p, :scope > div > p');
 		let nothingToDo = true;
 		for (let par of paragraphs)
 			if (par.innerHTML.includes('<br>\n:   ')) {
@@ -61,7 +61,7 @@ export default class DefinitionListPlugin extends Plugin {
 				})
 				
 				// put the <dl> in place of the <p>
-				element.replaceChild(defList, par);
+				par.replaceWith(defList);
 			})
 			resultCallback(null);
 		})
