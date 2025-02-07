@@ -2,6 +2,9 @@
 *.iml
 .idea
 
+# MacOS
+.DS_Store
+
 # npm
 node_modules
 package-lock.json
