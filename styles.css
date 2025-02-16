@@ -1,4 +1,4 @@
-/* <dl> element and its <dt> and <dd> children */
+/* <dl> element's <dt> and <dd> children */
 
 dt, .view-dt {
 	font-weight: bold;
@@ -16,8 +16,10 @@ dd ul {
 
 .markdown-source-view.mod-cm6 .cm-content .cm-line.view-dd {
 	margin-inline-start: 30px !important;
+	text-indent: -18px !important; /* first line of block */
 }
 
+/* This doesn't work (not implemented in Obsidian?) */
 .view-dd:first-letter {
 	display: none !important;
 }

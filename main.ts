@@ -82,16 +82,42 @@ export default class DefinitionListPlugin extends Plugin {
 	}
 }
 
+/* The ViewPlugin class is generic: it requires an underlying type, a subclass of
+* the PluginValue class. That is to be the first argument passed into the class method
+* .fromClass() which returns a ViewPlugin instance with that underlying type.
+* The second argument of that class method, to give additional details, is a PluginSpec
+* instance with the same underlying type. It has zero or more of the properties eventHandlers,
+* eventObservers, provide, and decorations. The latter is a function that, when passed an
+* instance of the underlying class, returns a DecorationSet - in this case the function
+* simply returns the .decorations instance property. */
 const liveUpdateDefinitionLists = ViewPlugin.fromClass(
 	class {  // the plugin is based on an anonymous class we define here
 		decorations: DecorationSet;
-
+		private readonly TERM_CLASS: string = 'view-dt';
+		private readonly DEF_CLASS: string = 'view-dd';
 		constructor(view: EditorView) {
 			this.decorations = Decoration.none;
 		}
+		/* this.decorations should be a cumulative array of all the decorations (i.e.
+		* class changes) we have chosen to add to line elements. So we always add to it
+		* or modify an existing entry, rather than instantiating it anew.
+		* Note that its type, DecorationSet, is a RangeSet of items of the underlying
+		* type Decoration. Such a RangeSet object has properties and methods
+		* .size (number of elements); .iter() with optional arg from, an offset that
+		* lies in or before the first to be iterated; .update(RangeSetUpdate) to add
+		* or remove them (returns the new version); .between(from, to, func) run func
+		* on every Decoration between the offsets from and to; .map(ChangeDesc). */
 
 		update(update: ViewUpdate) {
-			if (update.docChanged || update.selectionSet) {
+			if (update.docChanged || update.selectionSet)
+			/* other boolean properties that may be useful:
+			*  .viewportChanged: viewport or visible ranges have changed
+			*  .geometryChanged: editor size or the document itself changed
+			*  .focusChanged: maybe some switch to another document, panel etc.;
+			*  change in View between Editing and Rendering view; but
+			*  when the document/Editing is activated, .geometryChanged is also true.
+			*/
+			{
 				const state = update.view.state;
 				const cursorPos = state.selection.main.head;
 
@@ -101,11 +127,43 @@ const liveUpdateDefinitionLists = ViewPlugin.fromClass(
 				// the text of the following line
 				const nextLineText: string = (state.doc.lines === currentLine.number) ? '' :
 					state.doc.line(currentLine.number + 1).text;
-				if (!currentLine.text.startsWith(':') && !nextLineText.startsWith(':'))
+				if (!currentLine.text.startsWith(':   ') && !nextLineText.startsWith(':   '))
 					return;
-				const lineclass: string = (currentLine.text.startsWith(':')) ? 'view-dd' : 'view-dt';
-				this.decorations = Decoration.set([Decoration.line({class: lineclass}).range(currentLine.from)]);
+
+				// TODO: two terms before one definition
+				// TODO: put : and first spaces in a separate div or so
+				//  and then in CSS say div:not(.cm-active)>.leading-chars {display: none;}
+				// TODO: parse all definition lists when first opening Edit View, or at
+				//  least those inside the viewport
+				// TODO: implement removal of class when it's not a DL anymore after an edit
+
+				// Perform a few checks before adding any classes
+				const lineClasses =  update.view.domAtPos(cursorPos)	.node.parentElement.closest('.cm-line')?.classList ||
+					{contains: (s: string) => false};
+				// No definition lists inside a code block
+				if (lineClasses.contains('HyperMD-codeblock'))
+					return;
+				// Don't add a class when it's already been done
+				if (lineClasses.contains(this.DEF_CLASS) ||
+					lineClasses.contains(this.TERM_CLASS))
+					return;
+
+				// Finally, as all criteria have been met, we get to work
+				const lineclass: string =
+					(currentLine.text.startsWith(':   ')) ? this.DEF_CLASS : this.TERM_CLASS;
+				this.decorations = this.decorations.update({add: [Decoration
+						.line({class: lineclass})
+						.range(currentLine.from)]});  // line decorations are 0-length
+				/* the argument for .update is of class RangeSetUpdate<Decoration>,
+				* and RangeSetUpdate is a typedef of an Object with optional
+				* property .add of class readonly Range<Decoration>; that in turn has
+				* instance properties from, to, and the Decoration.
+				* You can create a Range<Decoration> by creating a Decoration and
+				* applying its .range method (inherited from its superclass RangeValue).
+				* Note that .update doesn't modify the instance but returns it. */
 			}
+			// if (update.viewportChanged) console.log('viewport changed');
+			// if (update.geometryChanged) console.log('geometry changed');
 		}
 	},
 	{
