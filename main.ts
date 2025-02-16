@@ -1,4 +1,13 @@
-import { App, Plugin, MarkdownPostProcessor, MarkdownSectionInformation, PluginSettingTab, Setting } from 'obsidian';
+import {
+	App,
+	Plugin,
+	MarkdownPostProcessor,
+	MarkdownSectionInformation,
+	PluginSettingTab,
+	Setting,
+	MarkdownView
+} from 'obsidian';
+import {ViewPlugin, ViewUpdate, EditorView, DecorationSet, Decoration} from '@codemirror/view';
 
 export default class DefinitionListPlugin extends Plugin {
 	private static readonly definitionMarker: RegExp = /^\n?:   /;
@@ -8,7 +17,8 @@ export default class DefinitionListPlugin extends Plugin {
 	onload() {
 		console.log(`Loading plugin Definition List v${this.manifest.version}`);
 		this.registerMarkdownPostProcessor(this.formatDefinitionLists, 99);
-		this.addSettingTab(new SampleSettingTab(this.app, this));
+		this.addSettingTab(new DefinitionListSettingTab(this.app, this));
+		this.registerEditorExtension(liveUpdateDefinitionLists);
 	}
 
 	private formatDefinitionLists: MarkdownPostProcessor = function(element, context) {
@@ -72,7 +82,38 @@ export default class DefinitionListPlugin extends Plugin {
 	}
 }
 
-class SampleSettingTab extends PluginSettingTab {
+const liveUpdateDefinitionLists = ViewPlugin.fromClass(
+	class {  // the plugin is based on an anonymous class we define here
+		decorations: DecorationSet;
+
+		constructor(view: EditorView) {
+			this.decorations = Decoration.none;
+		}
+
+		update(update: ViewUpdate) {
+			if (update.docChanged || update.selectionSet) {
+				const state = update.view.state;
+				const cursorPos = state.selection.main.head;
+
+				// the Line object that represents the current line of the document
+				// note that state.doc is an object of class Text
+				const currentLine = state.doc.lineAt(cursorPos);
+				// the text of the following line
+				const nextLineText: string = (state.doc.lines === currentLine.number) ? '' :
+					state.doc.line(currentLine.number + 1).text;
+				if (!currentLine.text.startsWith(':') && !nextLineText.startsWith(':'))
+					return;
+				const lineclass: string = (currentLine.text.startsWith(':')) ? 'view-dd' : 'view-dt';
+				this.decorations = Decoration.set([Decoration.line({class: lineclass}).range(currentLine.from)]);
+			}
+		}
+	},
+	{
+		decorations: v => v.decorations,
+	}
+);
+
+class DefinitionListSettingTab extends PluginSettingTab {
 	display(): void {
 		let {containerEl} = this;
 

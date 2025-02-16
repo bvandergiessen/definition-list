@@ -1,8 +1,9 @@
 /* <dl> element and its <dt> and <dd> children */
 
-dt {
+dt, .view-dt {
 	font-weight: bold;
 	color: #557;
+	break-after: avoid-page;
 }
 
 dd {
@@ -13,4 +14,11 @@ dd ul {
 	margin-block: 0;
 }
 
+.markdown-source-view.mod-cm6 .cm-content .cm-line.view-dd {
+	margin-inline-start: 30px !important;
+}
+
+.view-dd:first-letter {
+	display: none !important;
+}
 

@@ -10,7 +10,11 @@ export default {
     format: 'cjs',
     exports: 'default'
   },
-  external: ['obsidian'],
+  external: [
+      '@codemirror/state',
+      '@codemirror/view',
+      'obsidian'
+  ],
   plugins: [
     typescript(),
     nodeResolve({browser: true}),
