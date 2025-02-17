@@ -2,12 +2,12 @@
 
 dt, .view-dt {
 	font-weight: bold;
-	color: #557;
+	color: var(--dtcolor);
 	break-after: avoid-page;
 }
 
 dd {
-	margin-inline-start: 30px;
+	margin-inline-start: var(--ddindentation);
 }
 
 dd ul {
@@ -15,8 +15,17 @@ dd ul {
 }
 
 .markdown-source-view.mod-cm6 .cm-content .cm-line.view-dd {
-	margin-inline-start: 30px !important;
+	margin-inline-start: var(--ddindentation) !important;
+}
+
+/* Correct first-line indentation of <dd>: */
+/* - If it's the current paragraph, unindent the first line */
+.markdown-source-view.mod-cm6 .cm-content .cm-line.view-dd.cm-active {
 	text-indent: -18px !important; /* first line of block */
+}
+/* - If it isn't, hide the <dd> markers ':   '  */
+.markdown-source-view.mod-cm6 .cm-content .cm-line:not(.cm-active)>.view-dd-marker {
+	display: none;
 }
 
 /* This doesn't work (not implemented in Obsidian?) */

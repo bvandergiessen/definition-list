@@ -5,20 +5,38 @@ import {
 	MarkdownSectionInformation,
 	PluginSettingTab,
 	Setting,
-	MarkdownView
+	MarkdownView, ColorComponent, SliderComponent
 } from 'obsidian';
 import {ViewPlugin, ViewUpdate, EditorView, DecorationSet, Decoration} from '@codemirror/view';
 
+interface DefinitionListPluginSettings {
+	dtcolor: string;
+	ddindentation: number;
+}
+const defaultSettings: DefinitionListPluginSettings = {
+	dtcolor: '#555577',
+	ddindentation: 30
+}
+
 export default class DefinitionListPlugin extends Plugin {
-	private static readonly definitionMarker: RegExp = /^\n?:   /;
+	private static readonly definitionMarker: RegExp = /^\n?: {3}/;
+	public settings: DefinitionListPluginSettings;
+	public cssElement: HTMLStyleElement;
 	
 	onInit() {}
 
-	onload() {
-		console.log(`Loading plugin Definition List v${this.manifest.version}`);
+	async onload() {
+		console.log(`Loading plugin ${this.manifest.name} v${this.manifest.version}`);
+		this.settings = Object.assign({}, defaultSettings, await this.loadData());
+		this.cssElement = document.createElement('style');
+		this.cssElement.textContent = `:root {
+			--dtcolor: ${this.settings.dtcolor};
+			--ddindentation: ${this.settings.ddindentation}px;	
+		}`;
+		document.head.appendChild(this.cssElement);
+		this.registerEditorExtension(liveUpdateDefinitionLists);
 		this.registerMarkdownPostProcessor(this.formatDefinitionLists, 99);
 		this.addSettingTab(new DefinitionListSettingTab(this.app, this));
-		this.registerEditorExtension(liveUpdateDefinitionLists);
 	}
 
 	private formatDefinitionLists: MarkdownPostProcessor = function(element, context) {
@@ -78,7 +96,8 @@ export default class DefinitionListPlugin extends Plugin {
 	}
 	
 	onunload() {
-		console.log('Unloading plugin Definition List');
+		console.log(`Unloading plugin ${this.manifest.name}`);
+		if (this.cssElement) this.cssElement.remove();
 	}
 }
 
@@ -93,8 +112,13 @@ export default class DefinitionListPlugin extends Plugin {
 const liveUpdateDefinitionLists = ViewPlugin.fromClass(
 	class {  // the plugin is based on an anonymous class we define here
 		decorations: DecorationSet;
+		private readonly MARKER: string = ':   ';
 		private readonly TERM_CLASS: string = 'view-dt';
 		private readonly DEF_CLASS: string = 'view-dd';
+		private readonly MARKER_CLASS: string = 'view-dd-marker';
+		private readonly TERM_DEC: Decoration = Decoration.line({class: this.TERM_CLASS});
+		private readonly DEF_DEC: Decoration = Decoration.line({class: this.DEF_CLASS});
+		private readonly MARKER_DEC: Decoration = Decoration.mark({class: this.MARKER_CLASS});
 		constructor(view: EditorView) {
 			this.decorations = Decoration.none;
 		}
@@ -127,33 +151,39 @@ const liveUpdateDefinitionLists = ViewPlugin.fromClass(
 				// the text of the following line
 				const nextLineText: string = (state.doc.lines === currentLine.number) ? '' :
 					state.doc.line(currentLine.number + 1).text;
-				if (!currentLine.text.startsWith(':   ') && !nextLineText.startsWith(':   '))
+				if (!currentLine.text.startsWith(this.MARKER) &&
+					!nextLineText.startsWith(this.MARKER))
 					return;
 
 				// TODO: two terms before one definition
-				// TODO: put : and first spaces in a separate div or so
-				//  and then in CSS say div:not(.cm-active)>.leading-chars {display: none;}
 				// TODO: parse all definition lists when first opening Edit View, or at
-				//  least those inside the viewport
+				//  least those inside the viewport (+ update if update.viewportChanged)
 				// TODO: implement removal of class when it's not a DL anymore after an edit
+				// FIXME: empty <dt> keeps getting additional decorations
 
-				// Perform a few checks before adding any classes
-				const lineClasses =  update.view.domAtPos(cursorPos)	.node.parentElement.closest('.cm-line')?.classList ||
-					{contains: (s: string) => false};
-				// No definition lists inside a code block
+				// Perform a few checks before adding any decorations
+				const lineClasses =  update.view
+						.domAtPos(cursorPos).node.parentElement.closest('.cm-line')?.classList
+						|| {contains: (s: string) => false};
+				// - No definition lists inside a code block
 				if (lineClasses.contains('HyperMD-codeblock'))
 					return;
-				// Don't add a class when it's already been done
+				// - Don't add a class when it's already been done
 				if (lineClasses.contains(this.DEF_CLASS) ||
 					lineClasses.contains(this.TERM_CLASS))
 					return;
 
 				// Finally, as all criteria have been met, we get to work
-				const lineclass: string =
-					(currentLine.text.startsWith(':   ')) ? this.DEF_CLASS : this.TERM_CLASS;
-				this.decorations = this.decorations.update({add: [Decoration
-						.line({class: lineclass})
-						.range(currentLine.from)]});  // line decorations are 0-length
+				const newDecorations =
+					currentLine.text.startsWith(this.MARKER)
+						? [
+							this.DEF_DEC.range(currentLine.from), // linedec anchored on start
+							this.MARKER_DEC.range(currentLine.from, currentLine.from+4)
+						] : [
+							this.TERM_DEC.range(currentLine.from)
+						];
+				this.decorations = this.decorations.update({add: newDecorations});
+				console.debug(this.decorations.size, 'decorations');
 				/* the argument for .update is of class RangeSetUpdate<Decoration>,
 				* and RangeSetUpdate is a typedef of an Object with optional
 				* property .add of class readonly Range<Decoration>; that in turn has
@@ -162,8 +192,8 @@ const liveUpdateDefinitionLists = ViewPlugin.fromClass(
 				* applying its .range method (inherited from its superclass RangeValue).
 				* Note that .update doesn't modify the instance but returns it. */
 			}
-			// if (update.viewportChanged) console.log('viewport changed');
-			// if (update.geometryChanged) console.log('geometry changed');
+			// else if (update.viewportChanged) console.log('viewport changed');
+			// else if (update.geometryChanged) console.log('geometry changed');
 		}
 	},
 	{
@@ -172,21 +202,93 @@ const liveUpdateDefinitionLists = ViewPlugin.fromClass(
 );
 
 class DefinitionListSettingTab extends PluginSettingTab {
-	display(): void {
-		let {containerEl} = this;
+	private readonly name: string;
+	private readonly settings: DefinitionListPluginSettings;
+	private readonly cssElement: HTMLStyleElement;
+	private readonly saveChanges: (data: any) => Promise<void>;
+	constructor(app: App, plugin: DefinitionListPlugin) {
+		super(app, plugin);
+		this.name = plugin.manifest.name;
+		this.settings = plugin.settings;
+		this.cssElement = plugin.cssElement;
+		this.saveChanges = plugin.saveData.bind(plugin);
+	}
 
+	display(): void {
+		const {containerEl} = this;
 		containerEl.empty();
 
-		containerEl.createEl('h2', {text: 'Settings for my awesome plugin.'});
+		const previewStyle = containerEl.createEl('style', {text: `
+			.example {
+				margin-top: 10px;
+				height: auto;
+				padding: 4px;
+				background-color: rgba(150, 150, 150, 0.1);
+			}
+			.example > dl {
+				margin-block: 0;
+			}
+		`})
+		containerEl.createEl('h2', {text: this.name});
 
+		// The Settings items
+		let colorSett: ColorComponent;
 		new Setting(containerEl)
-			.setName('Setting #1')
-			.setDesc('It\'s a secret')
-			.addText(text => text.setPlaceholder('Enter your secret')
-				.setValue('')
-				.onChange((value) => {
-					console.log('Secret: ' + value);
-				}));
+			.setName('Color of Terms')
+			.setDesc('Terms in a definition list are displayed bold, in this color')
+			.addColorPicker(cp => {
+				cp.setValue(this.settings.dtcolor)
+					.onChange(newColor => {
+						console.debug('color set to', newColor);
+						this.settings.dtcolor = newColor;
+						this.cssElement.sheet.insertRule(`:root {
+							--dtcolor: ${newColor};
+						}`, this.cssElement.sheet.cssRules.length);
+						this.saveChanges(this.settings);
+					});
+				colorSett = cp;
+				}
+			);
+		let indentSett: SliderComponent;
+		new Setting(containerEl)
+			.setName('Indentation of Definitions')
+			.setDesc('Definitions in a definition list are indented by this number of pixels')
+			.addSlider(sl => {
+				sl.setLimits(0, 50, 1)
+					.setValue(this.settings.ddindentation)
+					.setDynamicTooltip()
+					.onChange(value => {
+						console.debug('indentation set to', value, 'px');
+						this.settings.ddindentation = value;
+						this.cssElement.sheet.insertRule(`:root {
+							--ddindentation: ${value}px;
+						}`, this.cssElement.sheet.cssRules.length);
+						this.saveChanges(this.settings).then(console.debug);
+					});
+				indentSett = sl;
+				}
+			);
+		new Setting(containerEl)
+			.addButton(bt => bt.setButtonText('Reset')
+				.setTooltip('Color: dark blue, #555577\nIndentation: 30 pixels')
+				.onClick(evt => {
+					colorSett.setValue(defaultSettings.dtcolor);
+					indentSett.setValue(defaultSettings.ddindentation);
+				})
+			);
 
+		// The preview that shows how the settings work out
+		containerEl.createEl('div', {cls: 'setting-item-name', text: 'Preview'});
+		containerEl.createEl('div', {cls: 'example markdown-preview-view'})
+		.innerHTML = `
+			<dl>
+			<dt>definition list</dt>
+			<dd>a list of pairs <i>(term, definition)</i> where each
+			term is on its own line and its definition is on the line(s) below.
+			The definition is usually indented to set it apart from the term</dd>
+			<dt>indentation</dt>
+			<dd>when a line or paragraph starts at a distance from the left margin</dd>
+			</dl>
+		`;
 	}
 }
