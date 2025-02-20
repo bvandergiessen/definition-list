@@ -1,35 +1,31 @@
-/* <dl> element's <dt> and <dd> children */
+/* Definition Lists */
 
+/* Term in a definition list (all views) */
 dt, .view-dt {
 	font-weight: bold;
+	/*noinspection CssUnresolvedCustomProperty*/
 	color: var(--dtcolor);
 	break-after: avoid-page;
 }
-
-dd {
-	margin-inline-start: var(--ddindentation);
+/* Definition in a definition list (all views) */
+dd, .markdown-source-view.mod-cm6 .cm-content .cm-line.view-dd {
+	/*noinspection CssUnresolvedCustomProperty*/
+	margin-inline-start: var(--ddindentation) !important;
 }
 
+/* Reading View and PDF output */
 dd ul {
 	margin-block: 0;
 }
 
-.markdown-source-view.mod-cm6 .cm-content .cm-line.view-dd {
-	margin-inline-start: var(--ddindentation) !important;
-}
-
-/* Correct first-line indentation of <dd>: */
-/* - If it's the current paragraph, unindent the first line */
-.markdown-source-view.mod-cm6 .cm-content .cm-line.view-dd.cm-active {
+/* Editing View and Source Code View: first line of a <dd> */
+/* - In Source Code View and for the current paragraph in Editing View,
+ *   display the ':' but align the first line's text with the rest of the <dd> */
+.markdown-source-view.mod-cm6:not(.is-live-preview) .cm-line.view-dd,
+.markdown-source-view.mod-cm6.is-live-preview .cm-line.view-dd.cm-active {
 	text-indent: -18px !important; /* first line of block */
 }
-/* - If it isn't, hide the <dd> markers ':   '  */
-.markdown-source-view.mod-cm6 .cm-content .cm-line:not(.cm-active)>.view-dd-marker {
+/* - In Editing View if not the active line, hide the <dd> marker ':   '  */
+.markdown-source-view.mod-cm6.is-live-preview .cm-line:not(.cm-active) > .view-dd-marker {
 	display: none;
 }
-
-/* This doesn't work (not implemented in Obsidian?) */
-.view-dd:first-letter {
-	display: none !important;
-}
-

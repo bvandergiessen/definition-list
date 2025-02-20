@@ -1,13 +1,33 @@
-import {
-	App,
-	Plugin,
-	MarkdownPostProcessor,
-	MarkdownSectionInformation,
-	PluginSettingTab,
-	Setting,
-	MarkdownView, ColorComponent, SliderComponent
-} from 'obsidian';
+import {App, Plugin, MarkdownPostProcessor, MarkdownSectionInformation,
+	PluginSettingTab, Setting, MarkdownView, ColorComponent, SliderComponent,
+	PluginManifest} from 'obsidian';
 import {ViewPlugin, ViewUpdate, EditorView, DecorationSet, Decoration} from '@codemirror/view';
+
+/* Definition List plugin for Obsidian
+ * ===================================
+ * The plugin has four main components:
+ *  1. the default export, the class DefinitionListPlugin
+ *     that is instantiated once, when the plugin loads. It
+ *     registers items 2, 3 and 4 so Obsidian can use them.
+ *  2. the constant liveUpdateDefinitionLists, an instance
+ *     of the ViewPlugin class. Inside it, an anonymous class
+ *     is embedded that is instantiated when a document is
+ *     opened (or the first time the user switches to it): every
+ *     open document has its own instance of that embedded class.
+ *     Its .update method is called in Edit Mode whenever anything
+ *     happens - edits, scrolling, cursor movement - with contents
+ *     and details of the document and editor window passed in;
+ *     it tells the editor CodeMirror to add 'decorations' (classes
+ *     and spans) to the content, so it takes on the correct appearance
+ *  3. the function postProcessDefinitionLists, which adheres to the
+ *     MarkdownPostProcessor interface. When a document enters
+ *     Reading View, this function is called on every paragraph
+ *     changed since the last time in Reading View. It's called
+ *     once when the document is saved as a PDF.
+ *  4. the class DefinitionListSettingTab, that is instantiated
+ *     once, when the plugin loads. It sets up the settings page
+ *     and saves changed settings.
+ */
 
 interface DefinitionListPluginSettings {
 	dtcolor: string;
@@ -17,100 +37,45 @@ const defaultSettings: DefinitionListPluginSettings = {
 	dtcolor: '#555577',
 	ddindentation: 30
 }
+const definitionMarker: RegExp = /^\n?: {3}/;
 
+/* 1. The main class, instantiated by Obsidian when the plugin loads */
 export default class DefinitionListPlugin extends Plugin {
-	private static readonly definitionMarker: RegExp = /^\n?: {3}/;
 	public settings: DefinitionListPluginSettings;
-	public cssElement: HTMLStyleElement;
-	
-	onInit() {}
+	public readonly cssElement: HTMLStyleElement = document.createElement('style');
 
 	async onload() {
 		console.log(`Loading plugin ${this.manifest.name} v${this.manifest.version}`);
 		this.settings = Object.assign({}, defaultSettings, await this.loadData());
-		this.cssElement = document.createElement('style');
+		// this.cssElement = document.createElement('style');
 		this.cssElement.textContent = `:root {
 			--dtcolor: ${this.settings.dtcolor};
 			--ddindentation: ${this.settings.ddindentation}px;	
 		}`;
 		document.head.appendChild(this.cssElement);
 		this.registerEditorExtension(liveUpdateDefinitionLists);
-		this.registerMarkdownPostProcessor(this.formatDefinitionLists, 99);
+		this.registerMarkdownPostProcessor(postProcessDefinitionLists, 99);
 		this.addSettingTab(new DefinitionListSettingTab(this.app, this));
 	}
 
-	private formatDefinitionLists: MarkdownPostProcessor = function(element, context) {
-		/* The post-processor is called
-		 *  - when switching to Reading view: once per div that has changed
-		 *  - when exporting to PDF: on the whole page div
-		 *  - when the document first enters Reading view: on every child-div of page div
-		 */ 
-		
-		/* In direct descendants of type paragraph, look for definition lists.
-		 * Return as soon as possible.  */
-		const paragraphs = element.findAll(':scope > p, :scope > div > p');
-		let nothingToDo = true;
-		for (let par of paragraphs)
-			if (par.innerHTML.includes('<br>\n:   ')) {
-				nothingToDo = false;
-				break;
-			}
-		if (nothingToDo) return;
-		
-		return new Promise((resultCallback: (v: any) => void, errorCallback) => {		
-		// TODO: some error checking
-			paragraphs.forEach(par => {
-				if (!par.innerHTML.includes('<br>\n:   ')) return;
-			
-				// create the <dl> element that is to replace the paragraph element
-				const defList = document.createElement('dl');
-				let startOfLine: boolean = true;
-				let itemElement: HTMLElement;
-				
-				// fill the new <dl> with clones of the nodes in the original <p>
-				par.childNodes.forEach(node => {
-					if ('tagName' in node && node.tagName === "BR") {
-						startOfLine = true;
-						return;
-					}
-					const clone = node.cloneNode(true);
-					if (startOfLine) {
-						const matchDef = node.textContent.match(DefinitionListPlugin.definitionMarker);
-						if (matchDef) {
-							itemElement = defList.createEl('dd');
-							clone.textContent = node.textContent.slice(matchDef[0].length);
-						}
-						else {
-							itemElement = defList.createEl('dt');					
-						}
-						startOfLine = false;
-					}
-					itemElement.append(clone);
-				})
-				
-				// put the <dl> in place of the <p>
-				par.replaceWith(defList);
-			})
-			resultCallback(null);
-		})
-	}
-	
 	onunload() {
 		console.log(`Unloading plugin ${this.manifest.name}`);
 		if (this.cssElement) this.cssElement.remove();
 	}
 }
 
-/* The ViewPlugin class is generic: it requires an underlying type, a subclass of
-* the PluginValue class. That is to be the first argument passed into the class method
-* .fromClass() which returns a ViewPlugin instance with that underlying type.
-* The second argument of that class method, to give additional details, is a PluginSpec
-* instance with the same underlying type. It has zero or more of the properties eventHandlers,
-* eventObservers, provide, and decorations. The latter is a function that, when passed an
-* instance of the underlying class, returns a DecorationSet - in this case the function
-* simply returns the .decorations instance property. */
+/* 2. The ViewPlugin that works in Edit Mode. */
 const liveUpdateDefinitionLists = ViewPlugin.fromClass(
-	class {  // the plugin is based on an anonymous class we define here
+	/* The ViewPlugin class is generic: it requires an underlying type, a subclass of
+     * the PluginValue class. That is to be the first argument passed into the class method
+     * .fromClass() which returns a ViewPlugin instance with that underlying type.
+     * The second argument of that class method, to give additional details, is a PluginSpec
+     * instance with the same underlying type. It has zero or more of the properties
+     * eventHandlers, eventObservers, provide, and decorations. The latter is a
+     * function that, when passed an instance of the underlying class, returns a
+     * DecorationSet - in this case the function simply returns the .decorations
+     * instance property. */
+	class {  // the plugin embeds an anonymous class we define here
 		decorations: DecorationSet;
 		private readonly MARKER: string = ':   ';
 		private readonly TERM_CLASS: string = 'view-dt';
@@ -134,13 +99,13 @@ const liveUpdateDefinitionLists = ViewPlugin.fromClass(
 
 		update(update: ViewUpdate) {
 			if (update.docChanged || update.selectionSet)
-			/* other boolean properties that may be useful:
-			*  .viewportChanged: viewport or visible ranges have changed
-			*  .geometryChanged: editor size or the document itself changed
-			*  .focusChanged: maybe some switch to another document, panel etc.;
-			*  change in View between Editing and Rendering view; but
-			*  when the document/Editing is activated, .geometryChanged is also true.
-			*/
+				/* other boolean properties that may be useful:
+                *  .viewportChanged: viewport or visible ranges have changed
+                *  .geometryChanged: editor size or the document itself changed
+                *  .focusChanged: maybe some switch to another document, panel etc.;
+                *  change in View between Editing and Rendering view; but
+                *  when the document/Editing is activated, .geometryChanged is also true.
+                */
 			{
 				const state = update.view.state;
 				const cursorPos = state.selection.main.head;
@@ -164,7 +129,7 @@ const liveUpdateDefinitionLists = ViewPlugin.fromClass(
 				// Perform a few checks before adding any decorations
 				const lineClasses =  update.view
 						.domAtPos(cursorPos).node.parentElement.closest('.cm-line')?.classList
-						|| {contains: (s: string) => false};
+					|| {contains: (s: string) => false};
 				// - No definition lists inside a code block
 				if (lineClasses.contains('HyperMD-codeblock'))
 					return;
@@ -201,6 +166,63 @@ const liveUpdateDefinitionLists = ViewPlugin.fromClass(
 	}
 );
 
+/* 3. The MarkdownPostProcessor that prepares Reading View and PDF export. */
+const postProcessDefinitionLists: MarkdownPostProcessor = function(element, context): Promise<null>|undefined {
+	/* This post-processor is called
+     *  - when the document first enters Reading view: on every child-div of page div
+     *  - when switching to Reading view: once per div that has changed
+     *  - when exporting to PDF: on the whole page div
+     */
+	/* In direct descendants of type paragraph, look for definition lists.
+     * Return as soon as possible.  */
+	const paragraphs = element.findAll(':scope > p, :scope > div > p');
+	let nothingToDo = true;
+	for (let par of paragraphs)
+		if (par.innerHTML.includes('<br>\n:   ')) {
+			nothingToDo = false;
+			break;
+		}
+	if (nothingToDo) return;
+
+	return new Promise((resultCallback: (v: any) => void, errorCallback) => {
+		// TODO: some error checking
+		paragraphs.forEach(par => {
+			if (!par.innerHTML.includes('<br>\n:   ')) return;
+
+			// create the <dl> element that is to replace the paragraph element
+			const defList = document.createElement('dl');
+			let startOfLine: boolean = true;
+			let itemElement: HTMLElement;
+
+			// fill the new <dl> with clones of the nodes in the original <p>
+			par.childNodes.forEach(node => {
+				if ('tagName' in node && node.tagName === "BR") {
+					startOfLine = true;
+					return;
+				}
+				const clone = node.cloneNode(true);
+				if (startOfLine) {
+					const matchDef = node.textContent.match(definitionMarker);
+					if (matchDef) {
+						itemElement = defList.createEl('dd');
+						clone.textContent = node.textContent.slice(matchDef[0].length);
+					}
+					else {
+						itemElement = defList.createEl('dt');
+					}
+					startOfLine = false;
+				}
+				itemElement.append(clone);
+			})
+
+			// put the <dl> in place of the <p>
+			par.replaceWith(defList);
+		})
+		resultCallback(null);
+	})
+}
+
+/* 4. The PluginSettingTab for this plugin's settings. */
 class DefinitionListSettingTab extends PluginSettingTab {
 	private readonly name: string;
 	private readonly settings: DefinitionListPluginSettings;
