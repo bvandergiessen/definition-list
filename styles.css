@@ -1,9 +1,11 @@
 /* Definition Lists */
 
+/* ALL VIEWS */
 /* Term in a definition list (all views) */
+/*noinspection CssUnresolvedCustomProperty*/
 dt, .view-dt {
-	font-weight: bold;
-	/*noinspection CssUnresolvedCustomProperty*/
+	font-weight: var(--dtweight);
+	font-style: var(--dtstyle);
 	color: var(--dtcolor);
 	break-after: avoid-page;
 }
@@ -12,13 +14,31 @@ dd, .markdown-source-view.mod-cm6 .cm-content .cm-line.view-dd {
 	/*noinspection CssUnresolvedCustomProperty*/
 	margin-inline-start: var(--ddindentation) !important;
 }
-
-/* Reading View and PDF output */
-dd ul {
+/* list inside <dd>, inserted by the user as HTML code */
+dd ul, dd ol {
 	margin-block: 0;
 }
 
-/* Editing View and Source Code View: first line of a <dd> */
+/* READING VIEW AND PDF OUTPUT */
+/* Markdown list immediately following a definition list: more indentation */
+.markdown-rendered div:has(dl) + div > :is(ul, ol) > li {
+	/*noinspection CssUnresolvedCustomProperty*/
+	margin-inline-start: calc(var(--ddindentation) + 3ch) !important;
+}
+/* Definition list, then markdown list (then definition list): no margins in between */
+.markdown-rendered div:has(+:is(.el-ul, .el-ol)) > dl, /* dl before list */
+.markdown-rendered div:has(>dl) + div:has(+div > dl) > :is(ul, ol), /* list between dl's */
+.markdown-rendered div:is(.el-ul, .el-ol) > *:has(+dl) /* list before dl inside div */{
+	margin-block-end: unset;
+}
+.markdown-rendered div:has(>dl) + div > :is(ul, ol), /* list after dl */
+.markdown-rendered div:has(>dl) + div:is(.el-ul, .el-ol) + div > dl, /* dl after list after dl */
+.markdown-rendered div:is(.el-ul, .el-ol) > * + dl /* dl after list inside div */ {
+	margin-block-start: unset;
+}
+
+/* EDITING VIEW AND SOURCE CODE VIEW */
+/* First line of a <dd> */
 /* - In Source Code View and for the current paragraph in Editing View,
  *   display the ':' but align the first line's text with the rest of the <dd> */
 .markdown-source-view.mod-cm6:not(.is-live-preview) .cm-line.view-dd,
@@ -29,3 +49,9 @@ dd ul {
 .markdown-source-view.mod-cm6.is-live-preview .cm-line:not(.cm-active) > .view-dd-marker {
 	display: none;
 }
+/* Hide empty line between a Markdown list and a following definition */
+/*
+.markdown-source-view.mod-cm6 .HyperMD-list-line + .cm-line:not(.cm-active):has(+.view-dd),
+.cm-line:has(+.view-dd):after, .markdown-source-view.mod-cm6 .cm-line br {
+	line-height: 0 !important;
+}*/

@@ -1,6 +1,8 @@
-import {App, Plugin, MarkdownPostProcessor, MarkdownSectionInformation,
+import {
+	App, Plugin, MarkdownPostProcessor, MarkdownSectionInformation,
 	PluginSettingTab, Setting, MarkdownView, ColorComponent, SliderComponent,
-	PluginManifest} from 'obsidian';
+	PluginManifest, ToggleComponent
+} from 'obsidian';
 import {ViewPlugin, ViewUpdate, EditorView, DecorationSet, Decoration} from '@codemirror/view';
 
 /* Definition List plugin for Obsidian
@@ -31,13 +33,18 @@ import {ViewPlugin, ViewUpdate, EditorView, DecorationSet, Decoration} from '@co
 
 interface DefinitionListPluginSettings {
 	dtcolor: string;
+	dtbold: boolean;
+	dtitalic: boolean;
 	ddindentation: number;
 }
 const defaultSettings: DefinitionListPluginSettings = {
 	dtcolor: '#555577',
+	dtbold: true,
+	dtitalic: false,
 	ddindentation: 30
 }
-const definitionMarker: RegExp = /^\n?: {3}/;
+const definitionMarker: RegExp = /(?:^|\n): {3}/;
+const MARKER: string = ':   ';
 
 /* 1. The main class, instantiated by Obsidian when the plugin loads */
 export default class DefinitionListPlugin extends Plugin {
@@ -47,9 +54,10 @@ export default class DefinitionListPlugin extends Plugin {
 	async onload() {
 		console.log(`Loading plugin ${this.manifest.name} v${this.manifest.version}`);
 		this.settings = Object.assign({}, defaultSettings, await this.loadData());
-		// this.cssElement = document.createElement('style');
 		this.cssElement.textContent = `:root {
 			--dtcolor: ${this.settings.dtcolor};
+			--dtweight: ${this.settings.dtbold ? 'bold' : 'inherit'};
+			--dtstyle: ${this.settings.dtitalic ? 'italic' : 'inherit'};
 			--ddindentation: ${this.settings.ddindentation}px;	
 		}`;
 		document.head.appendChild(this.cssElement);
@@ -67,17 +75,16 @@ export default class DefinitionListPlugin extends Plugin {
 /* 2. The ViewPlugin that works in Edit Mode. */
 const liveUpdateDefinitionLists = ViewPlugin.fromClass(
 	/* The ViewPlugin class is generic: it requires an underlying type, a subclass of
-     * the PluginValue class. That is to be the first argument passed into the class method
-     * .fromClass() which returns a ViewPlugin instance with that underlying type.
-     * The second argument of that class method, to give additional details, is a PluginSpec
-     * instance with the same underlying type. It has zero or more of the properties
-     * eventHandlers, eventObservers, provide, and decorations. The latter is a
-     * function that, when passed an instance of the underlying class, returns a
-     * DecorationSet - in this case the function simply returns the .decorations
-     * instance property. */
+     * the PluginValue class. That is to be the first argument passed into the class
+     * method .fromClass() which returns a ViewPlugin instance with that underlying
+     * type. The second argument of that class method, to give additional details,
+     * is a PluginSpec instance with the same underlying type. It has zero or more
+     * of the properties eventHandlers, eventObservers, provide, and decorations.
+     * The latter is a function that, when passed an instance of the underlying
+     * class, returns a DecorationSet - in this case the function simply returns
+     * the .decorations instance property. */
 	class {  // the plugin embeds an anonymous class we define here
 		decorations: DecorationSet;
-		private readonly MARKER: string = ':   ';
 		private readonly TERM_CLASS: string = 'view-dt';
 		private readonly DEF_CLASS: string = 'view-dd';
 		private readonly MARKER_CLASS: string = 'view-dd-marker';
@@ -116,8 +123,8 @@ const liveUpdateDefinitionLists = ViewPlugin.fromClass(
 				// the text of the following line
 				const nextLineText: string = (state.doc.lines === currentLine.number) ? '' :
 					state.doc.line(currentLine.number + 1).text;
-				if (!currentLine.text.startsWith(this.MARKER) &&
-					!nextLineText.startsWith(this.MARKER))
+				if (!currentLine.text.startsWith(MARKER) &&
+					!nextLineText.startsWith(MARKER))
 					return;
 
 				// TODO: two terms before one definition
@@ -140,7 +147,7 @@ const liveUpdateDefinitionLists = ViewPlugin.fromClass(
 
 				// Finally, as all criteria have been met, we get to work
 				const newDecorations =
-					currentLine.text.startsWith(this.MARKER)
+					currentLine.text.startsWith(MARKER)
 						? [
 							this.DEF_DEC.range(currentLine.from), // linedec anchored on start
 							this.MARKER_DEC.range(currentLine.from, currentLine.from+4)
@@ -171,26 +178,58 @@ const postProcessDefinitionLists: MarkdownPostProcessor = function(element, cont
 	/* This post-processor is called
      *  - when the document first enters Reading view: on every child-div of page div
      *  - when switching to Reading view: once per div that has changed
-     *  - when exporting to PDF: on the whole page div
-     */
-	/* In direct descendants of type paragraph, look for definition lists.
-     * Return as soon as possible.  */
-	const paragraphs = element.findAll(':scope > p, :scope > div > p');
-	let nothingToDo = true;
-	for (let par of paragraphs)
-		if (par.innerHTML.includes('<br>\n:   ')) {
-			nothingToDo = false;
-			break;
-		}
-	if (nothingToDo) return;
+     *  - when exporting to PDF: on the whole page div */
 
-	return new Promise((resultCallback: (v: any) => void, errorCallback) => {
-		// TODO: some error checking
-		paragraphs.forEach(par => {
-			if (!par.innerHTML.includes('<br>\n:   ')) return;
+	// console.debug(element.outerHTML);
+
+	/* In Reading View, the element passed in IS a single <div>;
+	 * in PDF output, it is the PARENT ELEMENT of all the <div>s.
+	 * First check if the element has class 'el-p' (Reading-view paragraph)
+	 * or 'markdown-rendered' (PDF-output root element).
+     * If neither, return immediately.  */
+	if (!element.classList.contains('el-p') &&
+		!element.classList.contains('el-ul') &&
+		!element.classList.contains('el-ol') &&
+		!element.classList.contains('markdown-rendered'))
+		return;
+
+	// it's one paragraph (in Reading View), or the whole document (PDF)
+	let preChecked: boolean = false;
+	if (element.classList.contains('el-p')) { // Reading View paragraph
+		if (!element.firstElementChild.innerHTML.match(definitionMarker))
+			return;
+		// console.debug('Now we will create the modified paragraph:');
+		// console.debug(element.textContent);
+		preChecked = true;
+	}
+	if (element.classList.contains('el-ul') || element.classList.contains('el-ol')) { // list. Is there a <dd> at the end?
+		if (!element.firstElementChild.lastElementChild.innerHTML.contains('\n'))
+			return;
+		const originalHTML: string = element.firstElementChild.lastElementChild
+			.innerHTML;
+		const newlinePos: number = originalHTML.indexOf('\n');
+		element.firstElementChild.lastElementChild.innerHTML =
+			originalHTML.slice(0, newlinePos);
+		element.appendChild(document.createElement('p')).innerHTML =
+			originalHTML.slice(newlinePos+1);
+		preChecked = true;
+	}
+
+	/* This Promise gets no content; the only use of its fulfillment
+	 * is to signal to the receiving process that we're done
+	 * editing its DOM */
+	return new Promise((resultCallback: (v: any) => void) => {
+		let paragraphs: HTMLParagraphElement[];
+		if (preChecked)
+			paragraphs = [element.lastElementChild as HTMLParagraphElement];
+		else
+			paragraphs = element.findAll(':scope > div > p') as HTMLParagraphElement[];
+
+		paragraphs.forEach((par: HTMLParagraphElement) => {
+			if (!preChecked && !par.innerHTML.match(definitionMarker)) return;
 
 			// create the <dl> element that is to replace the paragraph element
-			const defList = document.createElement('dl');
+			const defList: HTMLDListElement = document.createElement('dl');
 			let startOfLine: boolean = true;
 			let itemElement: HTMLElement;
 
@@ -202,13 +241,16 @@ const postProcessDefinitionLists: MarkdownPostProcessor = function(element, cont
 				}
 				const clone = node.cloneNode(true);
 				if (startOfLine) {
-					const matchDef = node.textContent.match(definitionMarker);
-					if (matchDef) {
+					if (node.textContent.match(definitionMarker)) {
 						itemElement = defList.createEl('dd');
-						clone.textContent = node.textContent.slice(matchDef[0].length);
+						clone.textContent = node.textContent.slice(4);
+					}
+					else if (node.textContent.length <= 100) {
+						// a term can't reasonably be longer than 100 chars
+						itemElement = defList.createEl('dt');
 					}
 					else {
-						itemElement = defList.createEl('dt');
+						itemElement = defList.createEl('p');
 					}
 					startOfLine = false;
 				}
@@ -239,8 +281,10 @@ class DefinitionListSettingTab extends PluginSettingTab {
 	display(): void {
 		const {containerEl} = this;
 		containerEl.empty();
-
-		const previewStyle = containerEl.createEl('style', {text: `
+		containerEl.createEl('style', {text: `
+			.mod-toggle {
+				border-top: none;
+			}
 			.example {
 				margin-top: 10px;
 				height: auto;
@@ -250,14 +294,14 @@ class DefinitionListSettingTab extends PluginSettingTab {
 			.example > dl {
 				margin-block: 0;
 			}
-		`})
+		`});
 		containerEl.createEl('h2', {text: this.name});
 
 		// The Settings items
 		let colorSett: ColorComponent;
 		new Setting(containerEl)
-			.setName('Color of Terms')
-			.setDesc('Terms in a definition list are displayed bold, in this color')
+			.setName('Terms')
+			.setDesc('Font color')
 			.addColorPicker(cp => {
 				cp.setValue(this.settings.dtcolor)
 					.onChange(newColor => {
@@ -271,10 +315,40 @@ class DefinitionListSettingTab extends PluginSettingTab {
 				colorSett = cp;
 				}
 			);
+		let weightSett: ToggleComponent;
+		new Setting(containerEl)
+			.setDesc('Bold font')
+			.addToggle(tog => {
+				tog.setValue(this.settings.dtbold)
+				.onChange(newWeight => {
+					console.debug('bold set to', newWeight);
+					this.settings.dtbold = newWeight;
+					this.cssElement.sheet.insertRule(`:root {
+						--dtweight: ${newWeight ? 'bold' : 'inherit'
+					}`, this.cssElement.sheet.cssRules.length);
+					this.saveChanges(this.settings);
+				})
+				weightSett = tog;
+			});
+		let styleSett: ToggleComponent;
+		new Setting(containerEl)
+			.setDesc('Italic font')
+			.addToggle(tog => {
+				tog.setValue(this.settings.dtitalic)
+					.onChange(newStyle => {
+						console.debug('italic set to', newStyle);
+						this.settings.dtitalic = newStyle;
+						this.cssElement.sheet.insertRule(`:root {
+						--dtstyle: ${newStyle ? 'italic' : 'inherit'
+						}`, this.cssElement.sheet.cssRules.length);
+						this.saveChanges(this.settings);
+					})
+				styleSett = tog;
+			});
 		let indentSett: SliderComponent;
 		new Setting(containerEl)
-			.setName('Indentation of Definitions')
-			.setDesc('Definitions in a definition list are indented by this number of pixels')
+			.setName('Definitions')
+			.setDesc('Indentation of the definitions')
 			.addSlider(sl => {
 				sl.setLimits(0, 50, 1)
 					.setValue(this.settings.ddindentation)
@@ -285,16 +359,18 @@ class DefinitionListSettingTab extends PluginSettingTab {
 						this.cssElement.sheet.insertRule(`:root {
 							--ddindentation: ${value}px;
 						}`, this.cssElement.sheet.cssRules.length);
-						this.saveChanges(this.settings).then(console.debug);
+						this.saveChanges(this.settings);
 					});
 				indentSett = sl;
 				}
 			);
 		new Setting(containerEl)
-			.addButton(bt => bt.setButtonText('Reset')
+			.addButton(bt => bt.setButtonText('Reset to defaults')
 				.setTooltip('Color: dark blue, #555577\nIndentation: 30 pixels')
 				.onClick(evt => {
 					colorSett.setValue(defaultSettings.dtcolor);
+					weightSett.setValue(defaultSettings.dtbold);
+					styleSett.setValue(defaultSettings.dtitalic);
 					indentSett.setValue(defaultSettings.ddindentation);
 				})
 			);
