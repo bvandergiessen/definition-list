@@ -4,6 +4,7 @@ import {
 	PluginManifest, ToggleComponent
 } from 'obsidian';
 import {ViewPlugin, ViewUpdate, EditorView, DecorationSet, Decoration} from '@codemirror/view';
+import {Line, Range} from "@codemirror/state";
 
 /* Definition List plugin for Obsidian
  * ===================================
@@ -37,6 +38,7 @@ interface DefinitionListPluginSettings {
 	dtitalic: boolean;
 	ddindentation: number;
 }
+
 const defaultSettings: DefinitionListPluginSettings = {
 	dtcolor: '#555577',
 	dtbold: true,
@@ -91,28 +93,93 @@ const liveUpdateDefinitionLists = ViewPlugin.fromClass(
 		private readonly TERM_DEC: Decoration = Decoration.line({class: this.TERM_CLASS});
 		private readonly DEF_DEC: Decoration = Decoration.line({class: this.DEF_CLASS});
 		private readonly MARKER_DEC: Decoration = Decoration.mark({class: this.MARKER_CLASS});
+		private never_updated: boolean = true;
+
 		constructor(view: EditorView) {
 			this.decorations = Decoration.none;
+			console.debug(`live updater for ${view.state.doc.line(1).text} started`);
 		}
-		/* this.decorations should be a cumulative array of all the decorations (i.e.
-		* class changes) we have chosen to add to line elements. So we always add to it
-		* or modify an existing entry, rather than instantiating it anew.
-		* Note that its type, DecorationSet, is a RangeSet of items of the underlying
-		* type Decoration. Such a RangeSet object has properties and methods
-		* .size (number of elements); .iter() with optional arg from, an offset that
-		* lies in or before the first to be iterated; .update(RangeSetUpdate) to add
-		* or remove them (returns the new version); .between(from, to, func) run func
-		* on every Decoration between the offsets from and to; .map(ChangeDesc). */
 
+		/* this.decorations type, DecorationSet, is a RangeSet of items of the underlying
+		 * type Decoration. Such a RangeSet object has properties and methods
+		 * .size (number of elements); .iter() with optional arg from, an offset that
+		 * lies in or before the first to be iterated; .update(RangeSetUpdate) to add
+		 * or remove them (returns the new version); .between(from, to, func) run func
+		 * on every Decoration between the offsets from and to; .map(ChangeDesc). */
+
+		/* the boolean VieuwUpdate properties that may be useful:
+		 *  .viewportChanged: viewport or visible ranges have changed
+		 *  .geometryChanged: editor size or the document itself changed
+		 *  .focusChanged: maybe some switch to another document, panel etc.;
+		 *  change in View between Editing and Rendering view; but
+		 *  when the document/Editing is activated, .geometryChanged is also true.
+		 * One change from Reading to Editing view triggered at one time:
+		 * viewportChanged, viewportMoved, heightChanged, geometryChanged; then
+		 * heightChanged, geometryChanged; then focusChanged; then heightChanged
+		 * and geometryChanged twice. Either we only use focus and viewport or
+		 * we debounce certain events.
+		 * Launching Obsidian with a document open: lots and lots; viewportChanged once.
+		 * Switching to an open doc for the first time after restart: instantiates
+		 * this class => use the constructor for this
+		 */
 		update(update: ViewUpdate) {
-			if (update.docChanged || update.selectionSet)
-				/* other boolean properties that may be useful:
-                *  .viewportChanged: viewport or visible ranges have changed
-                *  .geometryChanged: editor size or the document itself changed
-                *  .focusChanged: maybe some switch to another document, panel etc.;
-                *  change in View between Editing and Rendering view; but
-                *  when the document/Editing is activated, .geometryChanged is also true.
-                */
+			console.debug(Date());
+			for (let i of ['viewportChanged', 'viewportMoved', 'heightChanged',
+				'geometryChanged', 'focusChanged', 'docChanged', 'selectionSet']) {
+				if ((update as any)[i])
+					console.debug(i);
+			}
+			update.changes.iterChanges(console.debug, true);
+
+			/* viewportChanged means the whole DecorationSet must be completely
+			 * re-done from scratch, so if that event is part of the update,
+			 * only do that. Also, the first time Edit View is active. */
+			if (update.viewportChanged ||
+				(this.never_updated && update.view.contentDOM.isShown())) {
+				const docText = update.state.doc;
+				const newDecorations: Range<Decoration>[] = [];
+				for (let range of update.view.visibleRanges) {
+					// multiple ranges are always in document order, but the border
+					// between them may fall within a line
+					console.debug(range);
+					let previousLine: Line | null = null;
+					for (let lnr: number = docText.lineAt(range.from).number;
+						 lnr <= docText.lineAt(range.to).number;
+						 lnr++) {
+						const line: Line = docText.line(lnr);
+						// if the current line is a definition
+						if (line.text.startsWith(MARKER)) {
+							// a line may occur in more than one of the ranges; add it once
+							if (newDecorations.last()?.from == line.from)
+								continue;
+							if (previousLine?.length && !previousLine!.text.startsWith(MARKER))
+								newDecorations.push(this.TERM_DEC.range(previousLine!.from));
+							// FIXME: if previous line is e.g. a list, this fails
+							newDecorations.push(
+								this.DEF_DEC.range(line.from), // linedec anchored on start
+								this.MARKER_DEC.range(line.from, line.from + 4),
+							);
+						}
+						previousLine = line;	// preserve the line for the next round
+					}
+				}
+				console.debug(newDecorations);
+				this.decorations = Decoration.none.update({add: newDecorations});
+				this.never_updated = false;
+				return;
+			}
+
+			/* docChanged is usually simple: the .map method updates all offsets
+			 * beyond the insertion or deletion. But it gets complicated when the
+			 * edit happens inside a marker, or when the line suddenly has one. */
+			if (update.docChanged) {
+				// Map the existing decorations through the changes
+				this.decorations = this.decorations.map(update.changes);
+				// TODO: code for when a marker is added or destroyed
+			}
+			console.debug('---------------');
+
+			if (false && update.selectionSet)
 			{
 				const state = update.view.state;
 				const cursorPos = state.selection.main.head;
@@ -129,9 +196,7 @@ const liveUpdateDefinitionLists = ViewPlugin.fromClass(
 
 				// TODO: two terms before one definition
 				// TODO: parse all definition lists when first opening Edit View, or at
-				//  least those inside the viewport (+ update if update.viewportChanged)
-				// TODO: implement removal of class when it's not a DL anymore after an edit
-				// FIXME: empty <dt> keeps getting additional decorations
+				//  least those inside the viewport
 
 				// Perform a few checks before adding any decorations
 				const lineClasses =  update.view
@@ -146,6 +211,13 @@ const liveUpdateDefinitionLists = ViewPlugin.fromClass(
 					return;
 
 				// Finally, as all criteria have been met, we get to work
+				/* the argument for .update is of class RangeSetUpdate<Decoration>,
+                * and RangeSetUpdate is a typedef of an Object with optional
+                * property .add of class readonly Range<Decoration>; that in turn has
+                * instance properties from, to, and the Decoration.
+                * You can create a Range<Decoration> by creating a Decoration and
+                * applying its .range method (inherited from its superclass RangeValue).
+                * Note that .update doesn't modify the instance but returns it. */
 				const newDecorations =
 					currentLine.text.startsWith(MARKER)
 						? [
@@ -156,15 +228,7 @@ const liveUpdateDefinitionLists = ViewPlugin.fromClass(
 						];
 				this.decorations = this.decorations.update({add: newDecorations});
 				console.debug(this.decorations.size, 'decorations');
-				/* the argument for .update is of class RangeSetUpdate<Decoration>,
-				* and RangeSetUpdate is a typedef of an Object with optional
-				* property .add of class readonly Range<Decoration>; that in turn has
-				* instance properties from, to, and the Decoration.
-				* You can create a Range<Decoration> by creating a Decoration and
-				* applying its .range method (inherited from its superclass RangeValue).
-				* Note that .update doesn't modify the instance but returns it. */
 			}
-			// else if (update.viewportChanged) console.log('viewport changed');
 			// else if (update.geometryChanged) console.log('geometry changed');
 		}
 	},
