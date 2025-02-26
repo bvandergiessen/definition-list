@@ -1,8 +1,8 @@
 {
   "id": "definition-list",
   "name": "Definition list",
-  "version": "1.1.0",
-  "description": "Create a Definition list <dl> as in PHP Markdown Extra",
+  "version": "1.2.0",
+  "description": "Create Definition lists <dl> of terms and their meanings",
   "author": "BvdG",
   "isDesktopOnly": false
 }

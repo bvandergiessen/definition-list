@@ -6,7 +6,7 @@ export default {
   input: 'main.ts',
   output: {
     dir: '.',
-    sourcemap: 'inline',
+    sourcemap: false,
     format: 'cjs',
     exports: 'default'
   },
@@ -16,8 +16,14 @@ export default {
       'obsidian'
   ],
   plugins: [
-    typescript(),
+    typescript({
+      sourceMap: false,
+      inlineSources: false,
+      inlineSourceMap: false
+    }),
     nodeResolve({browser: true}),
-    commonjs(),
+    commonjs({
+      sourceMap: false
+    }),
   ]
 };

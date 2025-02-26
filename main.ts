@@ -4,7 +4,7 @@ import {
 	PluginManifest, ToggleComponent
 } from 'obsidian';
 import {ViewPlugin, ViewUpdate, EditorView, DecorationSet, Decoration} from '@codemirror/view';
-import {Line, Range} from "@codemirror/state";
+import {Line, Range, RangeSet} from "@codemirror/state";
 
 /* Definition List plugin for Obsidian
  * ===================================
@@ -38,7 +38,6 @@ interface DefinitionListPluginSettings {
 	dtitalic: boolean;
 	ddindentation: number;
 }
-
 const defaultSettings: DefinitionListPluginSettings = {
 	dtcolor: '#555577',
 	dtbold: true,
@@ -107,77 +106,46 @@ const liveUpdateDefinitionLists = ViewPlugin.fromClass(
 		 * or remove them (returns the new version); .between(from, to, func) run func
 		 * on every Decoration between the offsets from and to; .map(ChangeDesc). */
 
-		/* the boolean VieuwUpdate properties that may be useful:
-		 *  .viewportChanged: viewport or visible ranges have changed
-		 *  .geometryChanged: editor size or the document itself changed
+		/* the boolean ViewUpdate properties that may be useful:
+		 *  .viewportChanged: anything that may affect the viewport or visible ranges.
+		 *     This includes single-character edits! Thus, at best a general filter
+		 *  .viewportMoved: actual scrolling over significant distance; probably
+		 *     has made some invisible ranges visible so they may need to be decorated
+		 *  .docChanged: some edit to the document - normally a single character
+		 *  .geometryChanged: editor size, or the document itself, changed
 		 *  .focusChanged: maybe some switch to another document, panel etc.;
 		 *  change in View between Editing and Rendering view; but
 		 *  when the document/Editing is activated, .geometryChanged is also true.
 		 * One change from Reading to Editing view triggered at one time:
 		 * viewportChanged, viewportMoved, heightChanged, geometryChanged; then
 		 * heightChanged, geometryChanged; then focusChanged; then heightChanged
-		 * and geometryChanged twice. Either we only use focus and viewport or
-		 * we debounce certain events.
+		 * and geometryChanged twice. Some debouncing may be in order.
 		 * Launching Obsidian with a document open: lots and lots; viewportChanged once.
 		 * Switching to an open doc for the first time after restart: instantiates
 		 * this class => use the constructor for this
 		 */
 		update(update: ViewUpdate) {
-			console.debug(Date());
-			for (let i of ['viewportChanged', 'viewportMoved', 'heightChanged',
-				'geometryChanged', 'focusChanged', 'docChanged', 'selectionSet']) {
-				if ((update as any)[i])
-					console.debug(i);
-			}
-			update.changes.iterChanges(console.debug, true);
-
-			/* viewportChanged means the whole DecorationSet must be completely
-			 * re-done from scratch, so if that event is part of the update,
-			 * only do that. Also, the first time Edit View is active. */
-			if (update.viewportChanged ||
-				(this.never_updated && update.view.contentDOM.isShown())) {
-				const docText = update.state.doc;
-				const newDecorations: Range<Decoration>[] = [];
-				for (let range of update.view.visibleRanges) {
-					// multiple ranges are always in document order, but the border
-					// between them may fall within a line
-					console.debug(range);
-					let previousLine: Line | null = null;
-					for (let lnr: number = docText.lineAt(range.from).number;
-						 lnr <= docText.lineAt(range.to).number;
-						 lnr++) {
-						const line: Line = docText.line(lnr);
-						// if the current line is a definition
-						if (line.text.startsWith(MARKER)) {
-							// a line may occur in more than one of the ranges; add it once
-							if (newDecorations.last()?.from == line.from)
-								continue;
-							if (previousLine?.length && !previousLine!.text.startsWith(MARKER))
-								newDecorations.push(this.TERM_DEC.range(previousLine!.from));
-							// FIXME: if previous line is e.g. a list, this fails
-							newDecorations.push(
-								this.DEF_DEC.range(line.from), // linedec anchored on start
-								this.MARKER_DEC.range(line.from, line.from + 4),
-							);
-						}
-						previousLine = line;	// preserve the line for the next round
-					}
-				}
-				console.debug(newDecorations);
-				this.decorations = Decoration.none.update({add: newDecorations});
-				this.never_updated = false;
+			if (!update.viewportChanged && !this.never_updated)
 				return;
-			}
+			// console.debug(new Date().toTimeString());
 
-			/* docChanged is usually simple: the .map method updates all offsets
-			 * beyond the insertion or deletion. But it gets complicated when the
-			 * edit happens inside a marker, or when the line suddenly has one. */
-			if (update.docChanged) {
-				// Map the existing decorations through the changes
-				this.decorations = this.decorations.map(update.changes);
-				// TODO: code for when a marker is added or destroyed
+			/* Big scroll => whole DecorationSet from scratch; perhaps some of it can be
+			 * de-duplicated? Also runs the first time Edit View is active. */
+			if (update.viewportMoved ||
+				(this.never_updated && update.view.contentDOM.isShown())) {
+				console.debug(update.viewportChanged ? 'viewportMoved' : 'first update');
+				return this.decorateVisibleRangesFromScratch(update);
 			}
-			console.debug('---------------');
+			if (update.docChanged) {
+				console.debug('docChanged');
+				// update.changes.iterChanges(console.debug, true);
+				return this.adjustDecorationsAfterEdit(update);
+			}
+			// TODO: two terms before one definition
+			// TODO: sort out lists inside deflists (does Reading View deliver them identically to a second paragraph of a list item, entered with leading spaces? What happens in o1 output? In current version, even without preceding dl it makes a normal next line into a term - that's clearly wrong)
+			//   and `:   ` inside code block
+			// TODO: How about a centralized function that determines whether something is dt, dd, or neither?
+			// TODO: requestMeasure to set CSS for first-line indent
 
 			if (false && update.selectionSet)
 			{
@@ -193,10 +161,6 @@ const liveUpdateDefinitionLists = ViewPlugin.fromClass(
 				if (!currentLine.text.startsWith(MARKER) &&
 					!nextLineText.startsWith(MARKER))
 					return;
-
-				// TODO: two terms before one definition
-				// TODO: parse all definition lists when first opening Edit View, or at
-				//  least those inside the viewport
 
 				// Perform a few checks before adding any decorations
 				const lineClasses =  update.view
@@ -229,7 +193,76 @@ const liveUpdateDefinitionLists = ViewPlugin.fromClass(
 				this.decorations = this.decorations.update({add: newDecorations});
 				console.debug(this.decorations.size, 'decorations');
 			}
-			// else if (update.geometryChanged) console.log('geometry changed');
+		}
+		decorateVisibleRangesFromScratch(update: ViewUpdate) {
+			const docText = update.state.doc;
+			const newDecorations: Range<Decoration>[] = [];
+			for (let range of update.view.visibleRanges) {
+				// multiple ranges are always in document order, but the border
+				// between them may fall within a line
+				console.debug(range);
+				let previousLine: Line | null = null;
+				for (let lnr: number = docText.lineAt(range.from).number;
+					 lnr <= docText.lineAt(range.to).number;
+					 lnr++) {
+					const line: Line = docText.line(lnr);
+					// if the current line is a definition
+					if (line.text.startsWith(MARKER)) {
+						// a line may occur in more than one of the ranges; add it once
+						if (newDecorations.last()?.from == line.from)
+							continue;
+						if (previousLine?.length && !previousLine!.text.startsWith(MARKER))
+							newDecorations.push(this.TERM_DEC.range(previousLine!.from));
+						// FIXME: if previous line is e.g. a list, this fails
+						newDecorations.push(
+							this.DEF_DEC.range(line.from), // linedec anchored on start
+							this.MARKER_DEC.range(line.from, line.from + 4),
+						);
+					}
+					previousLine = line;	// preserve the line for the next round
+				}
+			}
+			console.debug(newDecorations);
+			this.decorations = RangeSet.of(newDecorations);
+			this.never_updated = false;
+		}
+
+		/* docChanged is usually simple: the .map method updates all offsets
+		 * beyond the insertion or deletion. But it gets complicated when the
+		 * edit happens inside a marker or creates one. */
+		adjustDecorationsAfterEdit(update: ViewUpdate) {
+			// this boolean gathers all requests for a complete update, to do it just once
+			let fullRedecorationRequired: boolean = false;
+			update.changes.iterChangedRanges((fA, tA, fB, tB) => {
+				const line: Line = update.state.doc.lineAt(fB);
+				if (line.from + 4 <= Math.min(fA, fB))
+					return;
+				console.debug('A change within the marker area');
+				let markerDecoration: boolean = false;
+				this.decorations.between(fB, tB, (f, t, dec) => {
+					if (dec.spec?.class === this.TERM_CLASS && !line.length)
+						// a term has been completely deleted. Remove its decoration
+						this.decorations = this.decorations.update({
+							filter: (f, t, v) => (v !== dec),
+							filterFrom: line.from,
+							filterTo: line.to
+						});
+					else if (dec.spec?.class === this.MARKER_CLASS) {
+						markerDecoration = true;
+						if (!line.text.startsWith(MARKER))
+							// no marker in a marker-decorated line
+							fullRedecorationRequired = true;
+					}
+				});
+				if (!markerDecoration && line.text.startsWith(MARKER))
+					// new marker, not yet decorated
+					fullRedecorationRequired = true;
+			})
+			if (fullRedecorationRequired)
+				this.decorateVisibleRangesFromScratch(update);
+			else
+				// Shift locations of existing decorations in accordance with changes
+				this.decorations = this.decorations.map(update.changes);
 		}
 	},
 	{
