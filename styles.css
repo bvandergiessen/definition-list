@@ -20,8 +20,8 @@ dd ul, dd ol {
 }
 
 /* READING VIEW AND PDF OUTPUT */
-/* Markdown list immediately following a definition list: more indentation */
-.markdown-rendered div:has(dl) + div > :is(ul, ol) > li {
+/* Markdown list inside a definition list: more indentation */
+.markdown-rendered div:has(dl) + div > :is(ul, ol) > li, .view-dd-li {
 	/*noinspection CssUnresolvedCustomProperty*/
 	margin-inline-start: calc(var(--ddindentation) + 3ch) !important;
 }
@@ -49,13 +49,9 @@ dd ul, dd ol {
 .markdown-source-view.mod-cm6.is-live-preview .cm-line:not(.cm-active) > .view-dd-marker {
 	display: none;
 }
-/* In Editing View, indent a list inside a definition list further */
-/* -- this seems impossible in pure CSS for arbitrary length of the list;
- * you'd have to add decorators for list elements right after definition lists */
-
-/* Hide empty line between a Markdown list and a following definition */
-/*
-.markdown-source-view.mod-cm6 .HyperMD-list-line + .cm-line:not(.cm-active):has(+.view-dd),
-.cm-line:has(+.view-dd):after, .markdown-source-view.mod-cm6 .cm-line br {
-	line-height: 0 !important;
-}*/
+/* In Editing View, indent a list inside a definition list further.
+ * Note that in this view, some of the list indentation is in padding, not margin */
+.markdown-source-view.mod-cm6 .cm-line.view-dd-li {
+	/*noinspection CssUnresolvedCustomProperty*/
+	margin-inline-start: var(--ddindentation) !important;
+}

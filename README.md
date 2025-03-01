@@ -23,7 +23,7 @@ The plugin converts this content to a definition list (as in HTML's `<dl>` eleme
 
 The example above then looks like
 
-![Definition list output](Output.png)
+![Definition list output](doc/Output.png)
 
 ### Edge cases
 A few special situations may occur:
@@ -56,7 +56,7 @@ $$
 
 Here, the final line is not part of the original definition list, which ends where the block formula starts; but it should still be displayed as a definition line:
 
-![Definition list output 2](Output2.png)
+![Definition list output 2](doc/Output2.png)
 
 #### Lists in definitions
 A list (bulleted or numbered) immediately following a definition is indented to the level of the definition (which is normally a bit deeper than the standard list-item indentation). Thus,
@@ -71,4 +71,4 @@ radiative forcing
 
 is rendered as
 
-![Definition list output 3](Output3.png)
+![Definition list output 3](doc/Output3.png)

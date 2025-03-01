@@ -13,6 +13,7 @@ export default {
   external: [
       '@codemirror/state',
       '@codemirror/view',
+      '@codemirror/language',
       'obsidian'
   ],
   plugins: [

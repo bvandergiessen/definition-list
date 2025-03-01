@@ -3,8 +3,10 @@ import {
 	PluginSettingTab, Setting, MarkdownView, ColorComponent, SliderComponent,
 	PluginManifest, ToggleComponent
 } from 'obsidian';
-import {ViewPlugin, ViewUpdate, EditorView, DecorationSet, Decoration} from '@codemirror/view';
+import {ViewPlugin, PluginValue, ViewUpdate, EditorView, DecorationSet, Decoration} from '@codemirror/view';
 import {Line, Range, RangeSet} from "@codemirror/state";
+import { syntaxTree } from "@codemirror/language";
+import {SyntaxNode, Tree} from "@lezer/common";
 
 /* Definition List plugin for Obsidian
  * ===================================
@@ -13,15 +15,15 @@ import {Line, Range, RangeSet} from "@codemirror/state";
  *     that is instantiated once, when the plugin loads. It
  *     registers items 2, 3 and 4 so Obsidian can use them.
  *  2. the constant liveUpdateDefinitionLists, an instance
- *     of the ViewPlugin class. Inside it, an anonymous class
- *     is embedded that is instantiated when a document is
- *     opened (or the first time the user switches to it): every
- *     open document has its own instance of that embedded class.
- *     Its .update method is called in Edit Mode whenever anything
- *     happens - edits, scrolling, cursor movement - with contents
- *     and details of the document and editor window passed in;
- *     it tells the editor CodeMirror to add 'decorations' (classes
- *     and spans) to the content, so it takes on the correct appearance
+ *     of the ViewPlugin class.
+ *  2a. It instantiates a DocumentDecorationEngine for every
+ *     open (active, loaded) document, i.e. a document has its
+ *     own DocumentDecorationEngine that formats its Definition
+ *     lists when it's in Edit Mode and Source Mode. Its .update
+ *     method is called in Edit Mode whenever anything happens -
+ *     first rendering, edits, scrolling; it tells the editor
+ *     CodeMirror to add 'decorations' (classes  and spans) to
+ *     the DOM so it takes on the correct appearance.
  *  3. the function postProcessDefinitionLists, which adheres to the
  *     MarkdownPostProcessor interface. When a document enters
  *     Reading View, this function is called on every paragraph
@@ -32,6 +34,13 @@ import {Line, Range, RangeSet} from "@codemirror/state";
  *     and saves changed settings.
  */
 
+interface blockOfLines {
+	firstLine: number,
+	special: boolean,
+	defMarker: boolean,
+	listLines: number[]
+}
+type lineType = 'blockStart' | 'blockEnd' | 'block' | 'contiguousBlock' | 'listItem' | 'normal';
 interface DefinitionListPluginSettings {
 	dtcolor: string;
 	dtbold: boolean;
@@ -46,6 +55,7 @@ const defaultSettings: DefinitionListPluginSettings = {
 }
 const definitionMarker: RegExp = /(?:^|\n): {3}/;
 const MARKER: string = ':   ';
+const MARKER_LEN: number = MARKER.length;
 
 /* 1. The main class, instantiated by Obsidian when the plugin loads */
 export default class DefinitionListPlugin extends Plugin {
@@ -73,202 +83,314 @@ export default class DefinitionListPlugin extends Plugin {
 	}
 }
 
-/* 2. The ViewPlugin that works in Edit Mode. */
-const liveUpdateDefinitionLists = ViewPlugin.fromClass(
-	/* The ViewPlugin class is generic: it requires an underlying type, a subclass of
-     * the PluginValue class. That is to be the first argument passed into the class
-     * method .fromClass() which returns a ViewPlugin instance with that underlying
-     * type. The second argument of that class method, to give additional details,
-     * is a PluginSpec instance with the same underlying type. It has zero or more
-     * of the properties eventHandlers, eventObservers, provide, and decorations.
-     * The latter is a function that, when passed an instance of the underlying
-     * class, returns a DecorationSet - in this case the function simply returns
-     * the .decorations instance property. */
-	class {  // the plugin embeds an anonymous class we define here
-		decorations: DecorationSet;
-		private readonly TERM_CLASS: string = 'view-dt';
-		private readonly DEF_CLASS: string = 'view-dd';
-		private readonly MARKER_CLASS: string = 'view-dd-marker';
-		private readonly TERM_DEC: Decoration = Decoration.line({class: this.TERM_CLASS});
-		private readonly DEF_DEC: Decoration = Decoration.line({class: this.DEF_CLASS});
-		private readonly MARKER_DEC: Decoration = Decoration.mark({class: this.MARKER_CLASS});
-		private never_updated: boolean = true;
+/* 2a.The DocumentDecorationEngine class: a document's live updater */
+/**
+ * An open (active) document's manager for its **Definition list** decorations.
+ * Keeps track of the decorations and updates them when needed.
+ */
+class DocumentDecorationEngine implements PluginValue {
+	/**
+	 * The decorations of one document in the editor.
+	 * Its type, `DecorationSet`, is a RangeSet of items of the underlying type Decoration.
+	 * It behaves as immutable! You use its methods not to change it in-place, but to
+	 * return a new DecorationSet with different properties, which you then re-assign
+     * to the `this.decorations` variable. A RangeSet object has properties and methods
+     * _.size_ (number of elements); _.iter()_ with optional arg `from`, an offset that
+     * lies in or before the first to be iterated; _.update(RangeSetUpdate)_ to add
+     * or remove them (returns the new version); _.between(from, to, func)_ to run `func`
+     * on every Decoration between the offsets `from` and `to`; _.map(ChangeDesc)_.
+	 */
+	decorations: DecorationSet;
+	private readonly TERM_CLASS: string = 'view-dt';
+	private readonly DEF_CLASS: string = 'view-dd';
+	private readonly DD_LIST_CLASS: string = 'view-dd-li';
+	private readonly MARKER_CLASS: string = 'view-dd-marker';
+	private readonly TERM_DEC: Decoration = Decoration.line({class: this.TERM_CLASS});
+	private readonly DEF_DEC: Decoration = Decoration.line({class: this.DEF_CLASS});
+	private readonly DD_LIST_DEC: Decoration = Decoration.line({class: this.DD_LIST_CLASS});
+	private readonly MARKER_DEC: Decoration = Decoration.mark({class: this.MARKER_CLASS});
+	private readonly BLOCK_START_TYPES: number[] = [10 /* code */, 17 /* formula */];
+	private readonly BLOCK_INNER_TYPES: number[] = [11 /* code */, 18 /* formula */];
+	private readonly BLOCK_END_TYPES: number[] = [13 /* code */, 22 /* formula */];
+	private readonly CONTIGUOUS_BLOCK_TYPES: number[] = [41, 38, 8, 44, 47, 50 /* headers 1-6 */,
+		55 /* table */, 129 /* blockquote */, 158 /* image */, 86 /* horizontal line */];
+		// special blocks that don't have start and end lines
+	private readonly LIST_TYPES: number[] = [16, 28, 32, 35, 70, 14, 26, 30, 34, 152];
+	private never_updated: boolean = true;
+	private numberOfLines: number = 1;
+	private readonly lineBlocks: blockOfLines[] = [];
 
-		constructor(view: EditorView) {
-			this.decorations = Decoration.none;
-			console.debug(`live updater for ${view.state.doc.line(1).text} started`);
+	constructor(view: EditorView) {
+		this.decorations = Decoration.none;
+		console.debug(`live updater for ${view.state.doc.line(1).text} started`);
+	}
+
+	/* the boolean ViewUpdate properties that may be useful:
+     *  .viewportChanged: anything that may affect the viewport or visible ranges.
+     *     This includes single-character edits! Thus, at best a general filter
+     *  .viewportMoved: actual scrolling over significant distance; probably
+     *     has made some invisible ranges visible so they may need to be decorated
+     *  .docChanged: some edit to the document - normally a single character
+     *  .geometryChanged: editor size, or the document itself, changed
+     *  .focusChanged: maybe some switch to another document, panel etc.;
+     *  change in View between Editing and Rendering view; but
+     *  when the document/Editing is activated, .geometryChanged is also true.
+     * There's no property that indicates "change of overall structure" (e.g.
+     * a new code block or table).
+     * One change from Reading to Editing view triggered at one time:
+     * viewportChanged, viewportMoved, heightChanged, geometryChanged; then
+     * heightChanged, geometryChanged; then focusChanged; then heightChanged
+     * and geometryChanged twice. Some debouncing may be in order.
+     * Launching Obsidian with a document open: lots and lots; viewportChanged once.
+     * Switching to an open doc for the first time after restart: instantiates
+     * this class => use the constructor for this
+     */
+	update(update: ViewUpdate) {
+		// for (let u of ['selectionSet', 'docChanged', 'geometryChanged', 'focusChanged',
+		// 	'heightChanged', 'viewportMoved', 'viewportChanged'])
+		// 	if ((update as any)[u])
+		// 		console.debug(u);
+
+		if (!update.viewportChanged && !this.never_updated) {
+			return;
 		}
+		// console.debug(new Date().toTimeString());
 
-		/* this.decorations type, DecorationSet, is a RangeSet of items of the underlying
-		 * type Decoration. Such a RangeSet object has properties and methods
-		 * .size (number of elements); .iter() with optional arg from, an offset that
-		 * lies in or before the first to be iterated; .update(RangeSetUpdate) to add
-		 * or remove them (returns the new version); .between(from, to, func) run func
-		 * on every Decoration between the offsets from and to; .map(ChangeDesc). */
-
-		/* the boolean ViewUpdate properties that may be useful:
-		 *  .viewportChanged: anything that may affect the viewport or visible ranges.
-		 *     This includes single-character edits! Thus, at best a general filter
-		 *  .viewportMoved: actual scrolling over significant distance; probably
-		 *     has made some invisible ranges visible so they may need to be decorated
-		 *  .docChanged: some edit to the document - normally a single character
-		 *  .geometryChanged: editor size, or the document itself, changed
-		 *  .focusChanged: maybe some switch to another document, panel etc.;
-		 *  change in View between Editing and Rendering view; but
-		 *  when the document/Editing is activated, .geometryChanged is also true.
-		 * One change from Reading to Editing view triggered at one time:
-		 * viewportChanged, viewportMoved, heightChanged, geometryChanged; then
-		 * heightChanged, geometryChanged; then focusChanged; then heightChanged
-		 * and geometryChanged twice. Some debouncing may be in order.
-		 * Launching Obsidian with a document open: lots and lots; viewportChanged once.
-		 * Switching to an open doc for the first time after restart: instantiates
-		 * this class => use the constructor for this
-		 */
-		update(update: ViewUpdate) {
-			if (!update.viewportChanged && !this.never_updated)
-				return;
-			// console.debug(new Date().toTimeString());
-
-			/* Big scroll => whole DecorationSet from scratch; perhaps some of it can be
-			 * de-duplicated? Also runs the first time Edit View is active. */
-			if (update.viewportMoved ||
-				(this.never_updated && update.view.contentDOM.isShown())) {
-				console.debug(update.viewportChanged ? 'viewportMoved' : 'first update');
-				return this.decorateVisibleRangesFromScratch(update);
-			}
-			if (update.docChanged) {
-				console.debug('docChanged');
-				// update.changes.iterChanges(console.debug, true);
-				return this.adjustDecorationsAfterEdit(update);
-			}
-			// TODO: two terms before one definition
-			// TODO: sort out lists inside deflists (does Reading View deliver them identically to a second paragraph of a list item, entered with leading spaces? What happens in o1 output? In current version, even without preceding dl it makes a normal next line into a term - that's clearly wrong)
-			//   and `:   ` inside code block
-			// TODO: How about a centralized function that determines whether something is dt, dd, or neither?
-			// TODO: requestMeasure to set CSS for first-line indent
-
-			if (false && update.selectionSet)
-			{
-				const state = update.view.state;
-				const cursorPos = state.selection.main.head;
-
-				// the Line object that represents the current line of the document
-				// note that state.doc is an object of class Text
-				const currentLine = state.doc.lineAt(cursorPos);
-				// the text of the following line
-				const nextLineText: string = (state.doc.lines === currentLine.number) ? '' :
-					state.doc.line(currentLine.number + 1).text;
-				if (!currentLine.text.startsWith(MARKER) &&
-					!nextLineText.startsWith(MARKER))
-					return;
-
-				// Perform a few checks before adding any decorations
-				const lineClasses =  update.view
-						.domAtPos(cursorPos).node.parentElement.closest('.cm-line')?.classList
-					|| {contains: (s: string) => false};
-				// - No definition lists inside a code block
-				if (lineClasses.contains('HyperMD-codeblock'))
-					return;
-				// - Don't add a class when it's already been done
-				if (lineClasses.contains(this.DEF_CLASS) ||
-					lineClasses.contains(this.TERM_CLASS))
-					return;
-
-				// Finally, as all criteria have been met, we get to work
-				/* the argument for .update is of class RangeSetUpdate<Decoration>,
-                * and RangeSetUpdate is a typedef of an Object with optional
-                * property .add of class readonly Range<Decoration>; that in turn has
-                * instance properties from, to, and the Decoration.
-                * You can create a Range<Decoration> by creating a Decoration and
-                * applying its .range method (inherited from its superclass RangeValue).
-                * Note that .update doesn't modify the instance but returns it. */
-				const newDecorations =
-					currentLine.text.startsWith(MARKER)
-						? [
-							this.DEF_DEC.range(currentLine.from), // linedec anchored on start
-							this.MARKER_DEC.range(currentLine.from, currentLine.from+4)
-						] : [
-							this.TERM_DEC.range(currentLine.from)
-						];
-				this.decorations = this.decorations.update({add: newDecorations});
-				console.debug(this.decorations.size, 'decorations');
-			}
+		/* Big scroll => whole DecorationSet from scratch; perhaps some of it can be
+         * de-duplicated? Also runs the first time Edit View is active. */
+		if (update.viewportMoved ||
+			(this.never_updated && update.view.contentDOM.isShown())) {
+			console.debug(update.viewportChanged ? 'viewportMoved' : 'first update');
+			return this.decorateVisibleRangesFromScratch(update);
 		}
-		decorateVisibleRangesFromScratch(update: ViewUpdate) {
-			const docText = update.state.doc;
-			const newDecorations: Range<Decoration>[] = [];
-			for (let range of update.view.visibleRanges) {
-				// multiple ranges are always in document order, but the border
-				// between them may fall within a line
-				console.debug(range);
-				let previousLine: Line | null = null;
-				for (let lnr: number = docText.lineAt(range.from).number;
-					 lnr <= docText.lineAt(range.to).number;
-					 lnr++) {
-					const line: Line = docText.line(lnr);
-					// if the current line is a definition
-					if (line.text.startsWith(MARKER)) {
-						// a line may occur in more than one of the ranges; add it once
-						if (newDecorations.last()?.from == line.from)
-							continue;
-						if (previousLine?.length && !previousLine!.text.startsWith(MARKER))
-							newDecorations.push(this.TERM_DEC.range(previousLine!.from));
-						// FIXME: if previous line is e.g. a list, this fails
-						newDecorations.push(
-							this.DEF_DEC.range(line.from), // linedec anchored on start
-							this.MARKER_DEC.range(line.from, line.from + 4),
-						);
-					}
-					previousLine = line;	// preserve the line for the next round
+		if (update.docChanged) {
+			console.debug('docChanged');
+			// update.changes.iterChanges(console.debug, true);
+			return this.adjustDecorationsAfterEdit(update);
+		}
+		// TODO: requestMeasure to set CSS for first-line indent
+	}
+
+	decorateVisibleRangesFromScratch(update: ViewUpdate) {
+		const docText = update.state.doc;
+		this.numberOfLines = docText.lines;
+		const tree: Tree = syntaxTree(update.state);  // to check line types
+		// console.debug(tree);
+		this.lineBlocks.splice(0);
+		let currentBlock: blockOfLines;
+		let lnr: number;
+		let inContiguousBlock: boolean = false;
+		for (let range of update.view.visibleRanges) {
+			/* multiple ranges are always in document order, but the border
+			 * between them may fall within a line. NB A range border
+			 * may fall inside special blocks (code, table, formula)! */
+			// console.debug('Range:', range);
+			lnr = docText.lineAt(range.from).number;
+			if (this.lineBlocks.length)
+				currentBlock = this.lineBlocks.last();
+			else {
+				currentBlock = {firstLine: lnr, special: false, defMarker: false, listLines: []};
+				this.lineBlocks.push(currentBlock);
+			}
+
+			/* 1. Find and record the locations of block boundaries
+			 * 2. Record which of the blocks are special (header etc.) and which
+			 *    have a definition marker somewhere inside. */
+			for (; lnr <= docText.lineAt(range.to).number; lnr++) {
+				const line: Line = docText.line(lnr);
+				const lineType: lineType = this.lineType(line.from, tree);
+				// console.debug(`${lnr}: ${lineType}`);
+				switch (lineType) {
+					case 'blockStart':
+						if (currentBlock.firstLine !== lnr) {
+							currentBlock = {
+								firstLine: lnr, special: true, defMarker: false, listLines: []}
+							;
+							this.lineBlocks.push(currentBlock);
+						} else
+							currentBlock.special = true;
+						break;
+					case 'blockEnd':
+						currentBlock.special = true;
+						currentBlock = {
+							firstLine: lnr + 1, special: false, defMarker: false, listLines: []
+						};
+						this.lineBlocks.push(currentBlock);
+						break;
+					case 'block':
+						currentBlock.special = true;
+						break;
+					case 'contiguousBlock':
+						if (!inContiguousBlock) {
+							inContiguousBlock = true;
+							if (currentBlock.firstLine !== lnr) {   // set up a new block
+								currentBlock = {
+									firstLine: lnr, special: true, defMarker: false, listLines: []
+								};
+								this.lineBlocks.push(currentBlock);
+							}
+							else
+								currentBlock.special = true;
+						}
+						break;
+					case 'normal':
+					case 'listItem':
+						// we may still be inside a special block
+						if (inContiguousBlock || (!currentBlock.special && !line.length)) {
+							// either we're just coming out of a table, a header, etc.,
+							// or there's an empty non-special line. Start a new block
+							if (currentBlock.firstLine !== lnr) {
+								currentBlock = {
+									firstLine: lnr, special: false, defMarker: false, listLines: []
+								};
+								this.lineBlocks.push(currentBlock);
+							}
+							inContiguousBlock = false;
+						}
+						if (line.text.startsWith(MARKER))
+							currentBlock.defMarker = true;
+						else if (lineType === 'listItem')
+							currentBlock.listLines.push(lnr);
 				}
 			}
-			console.debug(newDecorations);
-			this.decorations = RangeSet.of(newDecorations);
-			this.never_updated = false;
+		}
+		// console.debug(lnr, this.lineBlocks);
+
+		/* 3. Go through each definition-list block and set the formatting of every line. */
+		const newDecorations: Range<Decoration>[] = [];
+		for (let i = 0; i < this.lineBlocks.length; i++) {
+			if (this.lineBlocks[i].special || !this.lineBlocks[i].defMarker)
+				continue;  // not a definition list
+			let startline: number = this.lineBlocks[i].firstLine;
+			let endline: number = i == this.lineBlocks.length - 1 ? lnr : this.lineBlocks[i+1].firstLine;
+			for (let n = startline; n < endline; n++) {
+				const line: Line = docText.line(n);
+				if (line.text.startsWith(MARKER))
+					newDecorations.push(
+						this.DEF_DEC.range(line.from), // linedec anchored on start
+						this.MARKER_DEC.range(line.from, line.from + MARKER_LEN)
+					)
+				else if (this.lineBlocks[i].listLines.includes(n))
+					newDecorations.push(this.DD_LIST_DEC.range(line.from));
+				else if (line.length)
+					newDecorations.push(this.TERM_DEC.range(line.from));
+				// empty lines get no decoration
+			}
+		}
+		// console.debug(newDecorations);
+		/* the argument for .update is of class RangeSetUpdate<Decoration>,
+		* and RangeSetUpdate is a typedef of an Object with optional
+		* property .add of class readonly Range<Decoration>; that in turn has
+		* instance properties from, to, and the Decoration.
+		* You can create a Range<Decoration> by creating a Decoration and
+		* applying its .range method (inherited from its superclass RangeValue). */
+		this.decorations = RangeSet.of(newDecorations);
+		this.never_updated = false;
+	}
+
+	/* docChanged is usually simple: the .map method updates all offsets
+     * beyond the insertion or deletion. But it gets complicated when the
+     * edit happens inside a marker or creates one. */
+	adjustDecorationsAfterEdit(update: ViewUpdate) {
+		// Shift {from, to} of existing decorations in accordance with edit
+		this.decorations = this.decorations.map(update.changes);
+
+		/* Do a full re-parsing if the edit CHANGED THE BLOCK STRUCTURE
+         * of the document, by
+         * - changing the total number of lines (or should we be more lenient with this?)
+         * - emptying a line, or inserting text on an empty line
+         * - turning a normal block into a special block, or the reverse
+         * - turning a normal block into a definition list, or the reverse */
+		// Changed total number of lines:
+		if (update.state.doc.lines !== this.numberOfLines)
+			return this.decorateVisibleRangesFromScratch(update);
+		// this boolean gathers all requests for a complete update, to do it just once
+		let fullRedecorationRequired: boolean = false;
+		update.changes.iterChangedRanges((f0, t0, f1, t1) => {
+			if (fullRedecorationRequired)
+				return;  // no need to investigate anything: we've already decided
+			const line: Line = update.state.doc.lineAt(f1);
+			if (line.from + MARKER_LEN <= Math.min(f0, f1))
+				return;  // the edit took place outside the marker area
+			// Line emptied, or empty line filled:
+			if ((f0 === t0) !== (f1 === t1))  {
+				fullRedecorationRequired = true;
+				return;
+			}
+			for (var i= this.lineBlocks.length - 1; i >= 0; i--)
+				if (this.lineBlocks[i].firstLine <= line.number)
+					break;
+			const currentBlock: blockOfLines = this.lineBlocks[i];
+			// Turned normal block into special block, or the reverse:
+
+			// TODO: do we really want to go into the tree to get this? Or shall we wait for
+			//  a newline to be inserted etc.?
+
+			// Turned normal block into definition list, or (potentially) the reverse:
+			if (!currentBlock.special && currentBlock.defMarker !== line.text.startsWith(MARKER)) {
+				fullRedecorationRequired = true;
+				return;
+				// TODO: check whether this was never a marker-line to begin with. If
+				//  we're writing the next term, we don't want 4 full updates
+			}
+
+			/* Now that we have decided against a full re-decoration, let's
+			 * see whether we need to redecorate the current block:
+			 * terms turned into list items or the other way around. */
+
+		})
+		if (fullRedecorationRequired)
+			this.decorateVisibleRangesFromScratch(update);
+	}
+
+	lineType(pos: number, tree: Tree): lineType {
+		// check whether the position lies within a code block, table, formula block
+		/* Note that the syntaxTree is a lot "flatter" than you'd expect: a
+		 * code block is not one node with subnodes but a bunch of consecutive
+		 * nodes in the tree. So the real syntax TREE is hidden from us. */
+		let node = tree.resolveStack(pos, 1);
+		while (node) {
+			// console.debug(node.node?.name, node.node?.type?.id);
+			if (node.node?.type?.id === 1)
+				return 'normal';
+			if (this.BLOCK_START_TYPES.includes(node.node.type.id))
+				return 'blockStart';
+			if (this.BLOCK_INNER_TYPES.includes(node.node.type.id))
+				return 'block';
+			if (this.BLOCK_END_TYPES.includes(node.node.type.id))
+				return 'blockEnd';
+			if (this.CONTIGUOUS_BLOCK_TYPES.includes(node.node.type.id))
+				return 'contiguousBlock';
+			if (this.LIST_TYPES.includes(node.node.type.id))
+				return 'listItem';
+			node = node.next;
 		}
 
-		/* docChanged is usually simple: the .map method updates all offsets
-		 * beyond the insertion or deletion. But it gets complicated when the
-		 * edit happens inside a marker or creates one. */
-		adjustDecorationsAfterEdit(update: ViewUpdate) {
-			// this boolean gathers all requests for a complete update, to do it just once
-			let fullRedecorationRequired: boolean = false;
-			update.changes.iterChangedRanges((fA, tA, fB, tB) => {
-				const line: Line = update.state.doc.lineAt(fB);
-				if (line.from + 4 <= Math.min(fA, fB))
-					return;
-				console.debug('A change within the marker area');
-				let markerDecoration: boolean = false;
-				this.decorations.between(fB, tB, (f, t, dec) => {
-					if (dec.spec?.class === this.TERM_CLASS && !line.length)
-						// a term has been completely deleted. Remove its decoration
-						this.decorations = this.decorations.update({
-							filter: (f, t, v) => (v !== dec),
-							filterFrom: line.from,
-							filterTo: line.to
-						});
-					else if (dec.spec?.class === this.MARKER_CLASS) {
-						markerDecoration = true;
-						if (!line.text.startsWith(MARKER))
-							// no marker in a marker-decorated line
-							fullRedecorationRequired = true;
-					}
-				});
-				if (!markerDecoration && line.text.startsWith(MARKER))
-					// new marker, not yet decorated
-					fullRedecorationRequired = true;
-			})
-			if (fullRedecorationRequired)
-				this.decorateVisibleRangesFromScratch(update);
-			else
-				// Shift locations of existing decorations in accordance with changes
-				this.decorations = this.decorations.map(update.changes);
-		}
-	},
-	{
-		decorations: v => v.decorations,
+		/*const el = node.parentElement as HTMLElement;
+		const cls: DOMTokenList | undefined = el.closest('.cm-line')?.classList;
+		if (cls)
+			return cls.contains('HyperMD-codeblock');
+		if (el.closest('.cm-embed-block') || el.closest('table'))
+			// .cm-embed-block and .math are on elements that are siblings of the math source lines
+			return true;
+		return false;*/
 	}
+}
+
+/* 2. The ViewPlugin that works in Edit Mode. */
+const liveUpdateDefinitionLists: ViewPlugin<DocumentDecorationEngine> = ViewPlugin.fromClass(
+	DocumentDecorationEngine, {decorations: dde => dde.decorations}
 );
+/* The ViewPlugin class requires an embedded type that adheres to the
+ * PluginValue interface. the class method .fromClass() returns a
+ * ViewPlugin instance with that embedded type.
+ * The first argument passed into .fromClass is the embedded class.
+ * The second argument is a PluginSpec instance built on the same type.
+ * It has zero or more of the properties eventHandlers, eventObservers,
+ * provide, and decorations.
+ * The value of .decorations is a function that, when passed an instance
+ * of the embedded class, returns a DecorationSet - in this case the function
+ * simply returns the .decorations instance property. */
 
 /* 3. The MarkdownPostProcessor that prepares Reading View and PDF export. */
 const postProcessDefinitionLists: MarkdownPostProcessor = function(element, context): Promise<null>|undefined {
