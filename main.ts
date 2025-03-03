@@ -37,7 +37,7 @@ import {SyntaxNode, Tree} from "@lezer/common";
 interface blockOfLines {
 	firstLine: number,
 	special: boolean,
-	defMarker: boolean,
+	defMarkers: number[],
 	listLines: number[]
 }
 type lineType = 'blockStart' | 'blockEnd' | 'block' | 'contiguousBlock' | 'listItem' | 'normal';
@@ -56,6 +56,7 @@ const defaultSettings: DefinitionListPluginSettings = {
 const definitionMarker: RegExp = /(?:^|\n): {3}/;
 const MARKER: string = ':   ';
 const MARKER_LEN: number = MARKER.length;
+const MAX_TERM_LEN: number = 100;
 
 /* 1. The main class, instantiated by Obsidian when the plugin loads */
 export default class DefinitionListPlugin extends Plugin {
@@ -109,13 +110,24 @@ class DocumentDecorationEngine implements PluginValue {
 	private readonly DEF_DEC: Decoration = Decoration.line({class: this.DEF_CLASS});
 	private readonly DD_LIST_DEC: Decoration = Decoration.line({class: this.DD_LIST_CLASS});
 	private readonly MARKER_DEC: Decoration = Decoration.mark({class: this.MARKER_CLASS});
-	private readonly BLOCK_START_TYPES: number[] = [10 /* code */, 17 /* formula */];
-	private readonly BLOCK_INNER_TYPES: number[] = [11 /* code */, 18 /* formula */];
-	private readonly BLOCK_END_TYPES: number[] = [13 /* code */, 22 /* formula */];
-	private readonly CONTIGUOUS_BLOCK_TYPES: number[] = [41, 38, 8, 44, 47, 50 /* headers 1-6 */,
-		55 /* table */, 129 /* blockquote */, 158 /* image */, 86 /* horizontal line */];
-		// special blocks that don't have start and end lines
-	private readonly LIST_TYPES: number[] = [16, 28, 32, 35, 70, 14, 26, 30, 34, 152];
+	private readonly BLOCK_START_TYPES: string[] = [
+		'HyperMD-codeblock_HyperMD-codeblock-begin_HyperMD-codeblock-begin-bg_HyperMD-codeblock-bg',
+		'formatting_formatting-math_formatting-math-begin_keyword_math_math-block'
+	];
+	private readonly BLOCK_INNER_TYPES: string[] = [
+		'hmd-codeblock_variable', 'hmd-codeblock_keyword', 'math_variable-'
+	];
+	private readonly BLOCK_END_TYPES: string[] = [
+		'HyperMD-codeblock_HyperMD-codeblock-bg_HyperMD-codeblock-end_HyperMD-codeblock-end-bg',
+		'formatting_formatting-math_formatting-math-end_keyword_math_math-'
+	];
+	private readonly CONTIGUOUS_BLOCK_TYPES: string[] = [
+		'HyperMD-header_HyperMD-header-', 'HyperMD-quote_HyperMD-quote-',
+		'HyperMD-table-_HyperMD-table-row_HyperMD-table-row-',
+		'formatting_formatting-image_image_image-marker',
+		'HyperMD-list-line_HyperMD-list-line-_HyperMD-task-line', 'hr'
+	]; // special blocks that don't have start and end lines
+	private readonly LIST_TYPES: string[] = ['HyperMD-list-line_HyperMD-list-line-'];
 	private never_updated: boolean = true;
 	private numberOfLines: number = 1;
 	private readonly lineBlocks: blockOfLines[] = [];
@@ -160,11 +172,11 @@ class DocumentDecorationEngine implements PluginValue {
          * de-duplicated? Also runs the first time Edit View is active. */
 		if (update.viewportMoved ||
 			(this.never_updated && update.view.contentDOM.isShown())) {
-			console.debug(update.viewportChanged ? 'viewportMoved' : 'first update');
+			// console.debug(update.viewportChanged ? 'viewportMoved' : 'first update');
 			return this.decorateVisibleRangesFromScratch(update);
 		}
 		if (update.docChanged) {
-			console.debug('docChanged');
+			// console.debug('docChanged');
 			// update.changes.iterChanges(console.debug, true);
 			return this.adjustDecorationsAfterEdit(update);
 		}
@@ -189,7 +201,7 @@ class DocumentDecorationEngine implements PluginValue {
 			if (this.lineBlocks.length)
 				currentBlock = this.lineBlocks.last();
 			else {
-				currentBlock = {firstLine: lnr, special: false, defMarker: false, listLines: []};
+				currentBlock = {firstLine: lnr, special: false, defMarkers: [], listLines: []};
 				this.lineBlocks.push(currentBlock);
 			}
 
@@ -204,7 +216,7 @@ class DocumentDecorationEngine implements PluginValue {
 					case 'blockStart':
 						if (currentBlock.firstLine !== lnr) {
 							currentBlock = {
-								firstLine: lnr, special: true, defMarker: false, listLines: []}
+								firstLine: lnr, special: true, defMarkers: [], listLines: []}
 							;
 							this.lineBlocks.push(currentBlock);
 						} else
@@ -213,7 +225,7 @@ class DocumentDecorationEngine implements PluginValue {
 					case 'blockEnd':
 						currentBlock.special = true;
 						currentBlock = {
-							firstLine: lnr + 1, special: false, defMarker: false, listLines: []
+							firstLine: lnr + 1, special: false, defMarkers: [], listLines: []
 						};
 						this.lineBlocks.push(currentBlock);
 						break;
@@ -225,7 +237,7 @@ class DocumentDecorationEngine implements PluginValue {
 							inContiguousBlock = true;
 							if (currentBlock.firstLine !== lnr) {   // set up a new block
 								currentBlock = {
-									firstLine: lnr, special: true, defMarker: false, listLines: []
+									firstLine: lnr, special: true, defMarkers: [], listLines: []
 								};
 								this.lineBlocks.push(currentBlock);
 							}
@@ -241,14 +253,14 @@ class DocumentDecorationEngine implements PluginValue {
 							// or there's an empty non-special line. Start a new block
 							if (currentBlock.firstLine !== lnr) {
 								currentBlock = {
-									firstLine: lnr, special: false, defMarker: false, listLines: []
+									firstLine: lnr, special: false, defMarkers: [], listLines: []
 								};
 								this.lineBlocks.push(currentBlock);
 							}
 							inContiguousBlock = false;
 						}
 						if (line.text.startsWith(MARKER))
-							currentBlock.defMarker = true;
+							currentBlock.defMarkers.push(lnr);
 						else if (lineType === 'listItem')
 							currentBlock.listLines.push(lnr);
 				}
@@ -259,10 +271,11 @@ class DocumentDecorationEngine implements PluginValue {
 		/* 3. Go through each definition-list block and set the formatting of every line. */
 		const newDecorations: Range<Decoration>[] = [];
 		for (let i = 0; i < this.lineBlocks.length; i++) {
-			if (this.lineBlocks[i].special || !this.lineBlocks[i].defMarker)
+			if (this.lineBlocks[i].special || !this.lineBlocks[i].defMarkers.length)
 				continue;  // not a definition list
 			let startline: number = this.lineBlocks[i].firstLine;
-			let endline: number = i == this.lineBlocks.length - 1 ? lnr : this.lineBlocks[i+1].firstLine;
+			let endline: number = (i == this.lineBlocks.length - 1) ? lnr :
+				this.lineBlocks[i+1].firstLine;
 			for (let n = startline; n < endline; n++) {
 				const line: Line = docText.line(n);
 				if (line.text.startsWith(MARKER))
@@ -272,9 +285,9 @@ class DocumentDecorationEngine implements PluginValue {
 					)
 				else if (this.lineBlocks[i].listLines.includes(n))
 					newDecorations.push(this.DD_LIST_DEC.range(line.from));
-				else if (line.length)
+				else if (line.length > 0 && line.length <= MAX_TERM_LEN)
 					newDecorations.push(this.TERM_DEC.range(line.from));
-				// empty lines get no decoration
+				// empty lines and very long lines get no decoration
 			}
 		}
 		// console.debug(newDecorations);
@@ -290,21 +303,25 @@ class DocumentDecorationEngine implements PluginValue {
 
 	/* docChanged is usually simple: the .map method updates all offsets
      * beyond the insertion or deletion. But it gets complicated when the
-     * edit happens inside a marker or creates one. */
+     * edit changes the type and extent of blocks of the document. */
 	adjustDecorationsAfterEdit(update: ViewUpdate) {
 		// Shift {from, to} of existing decorations in accordance with edit
+		// This must be done first to ensure correct decoration changes
 		this.decorations = this.decorations.map(update.changes);
-
 		/* Do a full re-parsing if the edit CHANGED THE BLOCK STRUCTURE
-         * of the document, by
-         * - changing the total number of lines (or should we be more lenient with this?)
-         * - emptying a line, or inserting text on an empty line
-         * - turning a normal block into a special block, or the reverse
-         * - turning a normal block into a definition list, or the reverse */
-		// Changed total number of lines:
+         * of the document because it
+         * A. changed the total number of lines (TODO: be more subtle about
+         *    this: check whether the current block is still intact
+         *    and update blockOfLines.firstLine values after this line)
+         * B. emptied a line, or inserted text on an empty line (TODO: same)
+         * C. turned a normal block into a special block, or the reverse (TODO: same)
+         * D. turned a normal block into a definition list, or the reverse (TODO: same)
+         * TODO: long-term, incrementally move scenarios out of the 'full
+         *   redecoration' column into the 'deal with it locally' column */
+		// A. Changed total number of lines:
 		if (update.state.doc.lines !== this.numberOfLines)
 			return this.decorateVisibleRangesFromScratch(update);
-		// this boolean gathers all requests for a complete update, to do it just once
+		// Gather all requests for a complete update, to do it just once
 		let fullRedecorationRequired: boolean = false;
 		update.changes.iterChangedRanges((f0, t0, f1, t1) => {
 			if (fullRedecorationRequired)
@@ -312,32 +329,95 @@ class DocumentDecorationEngine implements PluginValue {
 			const line: Line = update.state.doc.lineAt(f1);
 			if (line.from + MARKER_LEN <= Math.min(f0, f1))
 				return;  // the edit took place outside the marker area
-			// Line emptied, or empty line filled:
-			if ((f0 === t0) !== (f1 === t1))  {
+
+			// B. Line emptied, or empty line filled:
+			// The whole line == the edited part after the edit
+			if (line.length === t1 - f1)  {
 				fullRedecorationRequired = true;
 				return;
 			}
+			// retrieve the information about the block in which the edit occurred
 			for (var i= this.lineBlocks.length - 1; i >= 0; i--)
 				if (this.lineBlocks[i].firstLine <= line.number)
 					break;
 			const currentBlock: blockOfLines = this.lineBlocks[i];
-			// Turned normal block into special block, or the reverse:
 
-			// TODO: do we really want to go into the tree to get this? Or shall we wait for
-			//  a newline to be inserted etc.?
-
-			// Turned normal block into definition list, or (potentially) the reverse:
-			if (!currentBlock.special && currentBlock.defMarker !== line.text.startsWith(MARKER)) {
+			// C. Turned normal block into special block, or the reverse:
+			// Do we really want to go into the tree to check this? TBD
+			if (currentBlock.special === !line.text.match(/^(\$\$|```|> )/)) {
 				fullRedecorationRequired = true;
 				return;
-				// TODO: check whether this was never a marker-line to begin with. If
-				//  we're writing the next term, we don't want 4 full updates
 			}
 
-			/* Now that we have decided against a full re-decoration, let's
-			 * see whether we need to redecorate the current block:
-			 * terms turned into list items or the other way around. */
+			// D. Turned normal block into definition list, or the reverse.
+			// We combine this with decoration-updating after a single marker change
+			if (!currentBlock.special &&
+				currentBlock.defMarkers.includes(line.number) !== line.text.startsWith(MARKER)) {
+				// If this concerns the ONLY marker, do a full redecoration.
+				// Either a marker was added; insert it in the list...
+				if (line.text.startsWith(MARKER)) {
+					currentBlock.defMarkers.push(line.number);
+					if (currentBlock.defMarkers.length === 1) {
+						fullRedecorationRequired = true;
+						return;
+					}
+					this.decorations = this.decorations.update({
+						add: [
+							this.DEF_DEC.range(line.from),
+							this.MARKER_DEC.range(line.from, line.from + MARKER_LEN)
+						],
+						/* remove the Term decoration from this line */
+						filter: (f, t, d) =>
+							(this.TERM_CLASS !== d.spec.class),
+						filterFrom: line.from,
+						filterTo: line.to
+					})
+				}
+				// ...or a marker was removed; delete its reference from the list
+				else {
+					currentBlock.defMarkers.remove(line.number);
+					if (!currentBlock.defMarkers.length) {
+						fullRedecorationRequired = true;
+						return;
+					}
+					this.decorations = this.decorations.update({
+						filter: (f, t, d) =>
+							![this.MARKER_CLASS, this.DEF_CLASS].includes(d.spec.class),
+						filterFrom: line.from,
+						filterTo: line.to,
+						add: [this.TERM_DEC.range(line.from)]
+					});
+				}
+			}
 
+			// Without full redecoration:
+			// Terms turned into list items or the other way around
+			if (!currentBlock.special &&
+				currentBlock.listLines.includes(line.number) === !line.text.match(/^(\*|-|\+|\d+\.) /)) {
+				// Either a list item was added; insert it in the list...
+				if (!currentBlock.listLines.includes(line.number)) {
+					currentBlock.listLines.push(line.number);
+					this.decorations = this.decorations.update({
+						add: [this.DD_LIST_DEC.range(line.from)],
+						/* remove the Term decoration from this line */
+						filter: (f, t, d) =>
+							(this.TERM_CLASS !== d.spec.class),
+						filterFrom: line.from,
+						filterTo: line.to
+					})
+				}
+				// ...or a list item was removed; delete its reference from the list
+				else {
+					currentBlock.listLines.remove(line.number);
+					this.decorations = this.decorations.update({
+						filter: (f, t, d) =>
+							(this.DD_LIST_CLASS !== d.spec.class),
+						filterFrom: line.from,
+						filterTo: line.to,
+						add: [this.TERM_DEC.range(line.from)]
+					});
+				}
+			}
 		})
 		if (fullRedecorationRequired)
 			this.decorateVisibleRangesFromScratch(update);
@@ -347,21 +427,24 @@ class DocumentDecorationEngine implements PluginValue {
 		// check whether the position lies within a code block, table, formula block
 		/* Note that the syntaxTree is a lot "flatter" than you'd expect: a
 		 * code block is not one node with subnodes but a bunch of consecutive
-		 * nodes in the tree. So the real syntax TREE is hidden from us. */
+		 * nodes in the tree. So the real syntax TREE is hidden from us.
+		 * Note that the number node.type.id for a particular type is different
+		 * at every run of Obsidian, so .id can't be used with consistency */
 		let node = tree.resolveStack(pos, 1);
 		while (node) {
 			// console.debug(node.node?.name, node.node?.type?.id);
 			if (node.node?.type?.id === 1)
 				return 'normal';
-			if (this.BLOCK_START_TYPES.includes(node.node.type.id))
+			const name = node.node!.name.replace(/\d/g, '');
+			if (this.BLOCK_START_TYPES.contains(name))
 				return 'blockStart';
-			if (this.BLOCK_INNER_TYPES.includes(node.node.type.id))
+			if (this.BLOCK_INNER_TYPES.contains(name))
 				return 'block';
-			if (this.BLOCK_END_TYPES.includes(node.node.type.id))
+			if (this.BLOCK_END_TYPES.contains(name))
 				return 'blockEnd';
-			if (this.CONTIGUOUS_BLOCK_TYPES.includes(node.node.type.id))
+			if (this.CONTIGUOUS_BLOCK_TYPES.contains(name))
 				return 'contiguousBlock';
-			if (this.LIST_TYPES.includes(node.node.type.id))
+			if (this.LIST_TYPES.contains(name))
 				return 'listItem';
 			node = node.next;
 		}
@@ -397,15 +480,19 @@ const postProcessDefinitionLists: MarkdownPostProcessor = function(element, cont
 	/* This post-processor is called
      *  - when the document first enters Reading view: on every child-div of page div
      *  - when switching to Reading view: once per div that has changed
-     *  - when exporting to PDF: on the whole page div */
+     *  - when exporting to PDF: on the whole page div
+     * One difficulty is with definitions that include a list: all the subsequent
+     * terms and definitions are absorbed in one <li> list item, so we need to
+     * extract them, potentially split up the list, and create a <dl> for them */
 
 	// console.debug(element.outerHTML);
 
 	/* In Reading View, the element passed in IS a single <div>;
 	 * in PDF output, it is the PARENT ELEMENT of all the <div>s.
-	 * First check if the element has class 'el-p' (Reading-view paragraph)
+	 * First check if the element has class 'el-p' (Reading-view
+	 * paragraph), 'el-ul'/'el-ol' (Reading view list),
 	 * or 'markdown-rendered' (PDF-output root element).
-     * If neither, return immediately.  */
+     * If not, return immediately.  */
 	if (!element.classList.contains('el-p') &&
 		!element.classList.contains('el-ul') &&
 		!element.classList.contains('el-ol') &&
@@ -413,39 +500,42 @@ const postProcessDefinitionLists: MarkdownPostProcessor = function(element, cont
 		return;
 
 	// it's one paragraph (in Reading View), or the whole document (PDF)
-	let preChecked: boolean = false;
+	let preCheckedPar: boolean = false,
+	    preCheckedList: boolean = false;
 	if (element.classList.contains('el-p')) { // Reading View paragraph
 		if (!element.firstElementChild.innerHTML.match(definitionMarker))
 			return;
 		// console.debug('Now we will create the modified paragraph:');
 		// console.debug(element.textContent);
-		preChecked = true;
+		preCheckedPar = true;
 	}
-	if (element.classList.contains('el-ul') || element.classList.contains('el-ol')) { // list. Is there a <dd> at the end?
-		if (!element.firstElementChild.lastElementChild.innerHTML.contains('\n'))
+	else if (element.classList.contains('el-ul') || element.classList.contains('el-ol')) {
+		// list: see if any newlines are inside, which may indicate definition lists
+		if (!element.findAll('li').find(li => li.innerHTML.match(definitionMarker)))
 			return;
-		const originalHTML: string = element.firstElementChild.lastElementChild
-			.innerHTML;
-		const newlinePos: number = originalHTML.indexOf('\n');
-		element.firstElementChild.lastElementChild.innerHTML =
-			originalHTML.slice(0, newlinePos);
-		element.appendChild(document.createElement('p')).innerHTML =
-			originalHTML.slice(newlinePos+1);
-		preChecked = true;
+		preCheckedList = true;
 	}
 
-	/* This Promise gets no content; the only use of its fulfillment
-	 * is to signal to the receiving process that we're done
-	 * editing its DOM */
+	/* This Promise has no content; the only use of its fulfillment
+	 * is to signal to the receiving process that we're done editing
+	 * its DOM. It's probably prudent to let the most time-consuming
+	 * part of our work take place inside the promise-returning function. */
 	return new Promise((resultCallback: (v: any) => void) => {
-		let paragraphs: HTMLParagraphElement[];
-		if (preChecked)
+		let paragraphs: HTMLParagraphElement[] = [],
+			listItems: HTMLElement[] = [];
+		if (preCheckedPar)
 			paragraphs = [element.lastElementChild as HTMLParagraphElement];
-		else
+		else if (preCheckedList)
+			listItems = element.findAll('ul > li, ol > li')
+				.filter(li => li.innerHTML.match(definitionMarker));
+		else {
 			paragraphs = element.findAll(':scope > div > p') as HTMLParagraphElement[];
+			listItems = element.findAll('scope: > div > * > li')
+				.filter(li => li.innerHTML.match(definitionMarker));
+		}
 
 		paragraphs.forEach((par: HTMLParagraphElement) => {
-			if (!preChecked && !par.innerHTML.match(definitionMarker)) return;
+			if (!preCheckedPar && !par.innerHTML.match(definitionMarker)) return;
 
 			// create the <dl> element that is to replace the paragraph element
 			const defList: HTMLDListElement = document.createElement('dl');
@@ -464,7 +554,7 @@ const postProcessDefinitionLists: MarkdownPostProcessor = function(element, cont
 						itemElement = defList.createEl('dd');
 						clone.textContent = node.textContent.slice(4);
 					}
-					else if (node.textContent.length <= 100) {
+					else if (node.textContent.length <= MAX_TERM_LEN) {
 						// a term can't reasonably be longer than 100 chars
 						itemElement = defList.createEl('dt');
 					}
@@ -478,6 +568,54 @@ const postProcessDefinitionLists: MarkdownPostProcessor = function(element, cont
 
 			// put the <dl> in place of the <p>
 			par.replaceWith(defList);
+		})
+
+		listItems.forEach(li => {
+			const originalHTML: string = li.innerHTML;
+			const newlinePos: number = originalHTML.match(definitionMarker).index;
+			// if this is the last <li>, only create the <dl> after the list;
+			// if not, create the <dl> and after it another list for the remaining <li>s
+			li.innerHTML = originalHTML.slice(0, newlinePos);
+			const defList: HTMLDListElement = document.createElement('dl');
+			li.parentElement.insertAdjacentElement('afterend', defList);
+
+			// clone the contents of the <li> after newline to the <dl>
+			const virtual: HTMLDivElement = document.createElement('div');
+			virtual.innerHTML = originalHTML.slice(newlinePos+1);
+			let itemElement: HTMLElement;
+			let startOfLine: boolean = true;
+			virtual.childNodes.forEach(node => {
+				if ('tagName' in node && node.tagName === "BR") {
+					startOfLine = true;
+					return;
+				}
+				const clone = node.cloneNode(true);
+				if (startOfLine) {
+					if (node.textContent.match(definitionMarker)) {
+						itemElement = defList.createEl('dd');
+						clone.textContent = node.textContent.slice(4);
+					}
+					else if (node.textContent.length <= MAX_TERM_LEN) {
+						// a term can't reasonably be longer than 100 chars
+						itemElement = defList.createEl('dt');
+					}
+					else {
+						itemElement = defList.createEl('p');
+					}
+					startOfLine = false;
+				}
+				itemElement.append(clone);
+			})
+			if (!li.nextElementSibling)
+				return;
+			const newList: HTMLElement = li.parentElement.cloneNode(false) as HTMLElement;
+			defList.insertAdjacentElement('afterend', newList);
+			let nextLi = li.nextElementSibling;
+			while (nextLi) {
+				const afterThatLi = nextLi.nextElementSibling;
+				newList.append(nextLi); // after this command, nextLi has no nextElementSibling
+				nextLi = afterThatLi;
+			}
 		})
 		resultCallback(null);
 	})

@@ -1,7 +1,7 @@
 {
   "name": "definition-list",
-  "version": "1.2.0",
-  "description": "Create a Definition list <dl> as in PHP Markdown Extra",
+  "version": "1.3.0",
+  "description": "Create Definition lists <dl> of terms and their meanings",
   "main": "main.js",
   "scripts": {
     "dev": "rollup --config rollup.config.js -w",

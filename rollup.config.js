@@ -17,14 +17,8 @@ export default {
       'obsidian'
   ],
   plugins: [
-    typescript({
-      sourceMap: false,
-      inlineSources: false,
-      inlineSourceMap: false
-    }),
+    typescript(),
     nodeResolve({browser: true}),
-    commonjs({
-      sourceMap: false
-    }),
+    commonjs(),
   ]
 };

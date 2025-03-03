@@ -28,12 +28,14 @@ dd ul, dd ol {
 /* Definition list, then markdown list (then definition list): no margins in between */
 .markdown-rendered div:has(+:is(.el-ul, .el-ol)) > dl, /* dl before list */
 .markdown-rendered div:has(>dl) + div:has(+div > dl) > :is(ul, ol), /* list between dl's */
-.markdown-rendered div:is(.el-ul, .el-ol) > *:has(+dl) /* list before dl inside div */{
+.markdown-rendered div:is(.el-ul, .el-ol) > *:has(+dl), /* list before dl inside div */
+.markdown-rendered div:is(.el-ul, .el-ol) > dl:has(+:is(ul, ol)) /* dl inserted in list-div */ {
 	margin-block-end: unset;
 }
 .markdown-rendered div:has(>dl) + div > :is(ul, ol), /* list after dl */
 .markdown-rendered div:has(>dl) + div:is(.el-ul, .el-ol) + div > dl, /* dl after list after dl */
-.markdown-rendered div:is(.el-ul, .el-ol) > * + dl /* dl after list inside div */ {
+.markdown-rendered div:is(.el-ul, .el-ol) > * + dl, /* dl after list inside div */
+.markdown-rendered div:is(.el-ul, .el-ol) > dl + :is(ul, ol) /* list after dl that was inserted */ {
 	margin-block-start: unset;
 }
 
