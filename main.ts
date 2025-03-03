@@ -1,12 +1,11 @@
 import {
-	App, Plugin, MarkdownPostProcessor, MarkdownSectionInformation,
-	PluginSettingTab, Setting, MarkdownView, ColorComponent, SliderComponent,
-	PluginManifest, ToggleComponent
+	App, Plugin, MarkdownPostProcessor, PluginSettingTab, Setting,
+	ColorComponent, SliderComponent, ToggleComponent
 } from 'obsidian';
 import {ViewPlugin, PluginValue, ViewUpdate, EditorView, DecorationSet, Decoration} from '@codemirror/view';
 import {Line, Range, RangeSet} from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
-import {SyntaxNode, Tree} from "@lezer/common";
+import {Tree} from "@lezer/common";
 
 /* Definition List plugin for Obsidian
  * ===================================
@@ -59,6 +58,7 @@ const MARKER_LEN: number = MARKER.length;
 const MAX_TERM_LEN: number = 100;
 
 /* 1. The main class, instantiated by Obsidian when the plugin loads */
+// noinspection JSUnusedGlobalSymbols
 export default class DefinitionListPlugin extends Plugin {
 	public settings: DefinitionListPluginSettings;
 	public readonly cssElement: HTMLStyleElement = document.createElement('style');
@@ -323,7 +323,7 @@ class DocumentDecorationEngine implements PluginValue {
 			return this.decorateVisibleRangesFromScratch(update);
 		// Gather all requests for a complete update, to do it just once
 		let fullRedecorationRequired: boolean = false;
-		update.changes.iterChangedRanges((f0, t0, f1, t1) => {
+		update.changes.iterChangedRanges((f0, _t0, f1, t1) => {
 			if (fullRedecorationRequired)
 				return;  // no need to investigate anything: we've already decided
 			const line: Line = update.state.doc.lineAt(f1);
@@ -337,7 +337,8 @@ class DocumentDecorationEngine implements PluginValue {
 				return;
 			}
 			// retrieve the information about the block in which the edit occurred
-			for (var i= this.lineBlocks.length - 1; i >= 0; i--)
+			let i = this.lineBlocks.length - 1;
+			for (; i >= 0; i--)
 				if (this.lineBlocks[i].firstLine <= line.number)
 					break;
 			const currentBlock: blockOfLines = this.lineBlocks[i];
@@ -367,7 +368,7 @@ class DocumentDecorationEngine implements PluginValue {
 							this.MARKER_DEC.range(line.from, line.from + MARKER_LEN)
 						],
 						/* remove the Term decoration from this line */
-						filter: (f, t, d) =>
+						filter: (_f, _t, d) =>
 							(this.TERM_CLASS !== d.spec.class),
 						filterFrom: line.from,
 						filterTo: line.to
@@ -381,7 +382,7 @@ class DocumentDecorationEngine implements PluginValue {
 						return;
 					}
 					this.decorations = this.decorations.update({
-						filter: (f, t, d) =>
+						filter: (_f, _t, d) =>
 							![this.MARKER_CLASS, this.DEF_CLASS].includes(d.spec.class),
 						filterFrom: line.from,
 						filterTo: line.to,
@@ -400,7 +401,7 @@ class DocumentDecorationEngine implements PluginValue {
 					this.decorations = this.decorations.update({
 						add: [this.DD_LIST_DEC.range(line.from)],
 						/* remove the Term decoration from this line */
-						filter: (f, t, d) =>
+						filter: (_f, _t, d) =>
 							(this.TERM_CLASS !== d.spec.class),
 						filterFrom: line.from,
 						filterTo: line.to
@@ -410,7 +411,7 @@ class DocumentDecorationEngine implements PluginValue {
 				else {
 					currentBlock.listLines.remove(line.number);
 					this.decorations = this.decorations.update({
-						filter: (f, t, d) =>
+						filter: (_f, _t, d) =>
 							(this.DD_LIST_CLASS !== d.spec.class),
 						filterFrom: line.from,
 						filterTo: line.to,
@@ -476,7 +477,7 @@ const liveUpdateDefinitionLists: ViewPlugin<DocumentDecorationEngine> = ViewPlug
  * simply returns the .decorations instance property. */
 
 /* 3. The MarkdownPostProcessor that prepares Reading View and PDF export. */
-const postProcessDefinitionLists: MarkdownPostProcessor = function(element, context): Promise<null>|undefined {
+const postProcessDefinitionLists: MarkdownPostProcessor = function(element): Promise<null>|undefined {
 	/* This post-processor is called
      *  - when the document first enters Reading view: on every child-div of page div
      *  - when switching to Reading view: once per div that has changed
@@ -533,38 +534,40 @@ const postProcessDefinitionLists: MarkdownPostProcessor = function(element, cont
 			listItems = element.findAll('scope: > div > * > li')
 				.filter(li => li.innerHTML.match(definitionMarker));
 		}
+		// function needed both for paragraphs and lists:
+		let startOfLine: boolean;
+		let itemElement: HTMLElement;
+		function insertClonedNode(node: ChildNode, defList: HTMLDListElement): void {
+			if ('tagName' in node && node.tagName === "BR") {
+				startOfLine = true;
+				return;
+			}
+			const clone = node.cloneNode(true);
+			if (startOfLine) {
+				if (node.textContent.match(definitionMarker)) {
+					itemElement = defList.createEl('dd');
+					clone.textContent = node.textContent.slice(4);
+				}
+				else if (node.textContent.length <= MAX_TERM_LEN) {
+					// a term can't reasonably be longer than 100 chars
+					itemElement = defList.createEl('dt');
+				}
+				else {
+					itemElement = defList.createEl('p');
+				}
+				startOfLine = false;
+			}
+			itemElement.append(clone);
+		}
 
 		paragraphs.forEach((par: HTMLParagraphElement) => {
 			if (!preCheckedPar && !par.innerHTML.match(definitionMarker)) return;
 
 			// create the <dl> element that is to replace the paragraph element
 			const defList: HTMLDListElement = document.createElement('dl');
-			let startOfLine: boolean = true;
-			let itemElement: HTMLElement;
-
 			// fill the new <dl> with clones of the nodes in the original <p>
-			par.childNodes.forEach(node => {
-				if ('tagName' in node && node.tagName === "BR") {
-					startOfLine = true;
-					return;
-				}
-				const clone = node.cloneNode(true);
-				if (startOfLine) {
-					if (node.textContent.match(definitionMarker)) {
-						itemElement = defList.createEl('dd');
-						clone.textContent = node.textContent.slice(4);
-					}
-					else if (node.textContent.length <= MAX_TERM_LEN) {
-						// a term can't reasonably be longer than 100 chars
-						itemElement = defList.createEl('dt');
-					}
-					else {
-						itemElement = defList.createEl('p');
-					}
-					startOfLine = false;
-				}
-				itemElement.append(clone);
-			})
+			startOfLine = true;
+			par.childNodes.forEach(node => insertClonedNode(node, defList))
 
 			// put the <dl> in place of the <p>
 			par.replaceWith(defList);
@@ -582,30 +585,8 @@ const postProcessDefinitionLists: MarkdownPostProcessor = function(element, cont
 			// clone the contents of the <li> after newline to the <dl>
 			const virtual: HTMLDivElement = document.createElement('div');
 			virtual.innerHTML = originalHTML.slice(newlinePos+1);
-			let itemElement: HTMLElement;
-			let startOfLine: boolean = true;
-			virtual.childNodes.forEach(node => {
-				if ('tagName' in node && node.tagName === "BR") {
-					startOfLine = true;
-					return;
-				}
-				const clone = node.cloneNode(true);
-				if (startOfLine) {
-					if (node.textContent.match(definitionMarker)) {
-						itemElement = defList.createEl('dd');
-						clone.textContent = node.textContent.slice(4);
-					}
-					else if (node.textContent.length <= MAX_TERM_LEN) {
-						// a term can't reasonably be longer than 100 chars
-						itemElement = defList.createEl('dt');
-					}
-					else {
-						itemElement = defList.createEl('p');
-					}
-					startOfLine = false;
-				}
-				itemElement.append(clone);
-			})
+			startOfLine = true;
+			virtual.childNodes.forEach(node => insertClonedNode(node, defList));
 			if (!li.nextElementSibling)
 				return;
 			const newList: HTMLElement = li.parentElement.cloneNode(false) as HTMLElement;
@@ -617,6 +598,7 @@ const postProcessDefinitionLists: MarkdownPostProcessor = function(element, cont
 				nextLi = afterThatLi;
 			}
 		})
+
 		resultCallback(null);
 	})
 }
@@ -667,6 +649,7 @@ class DefinitionListSettingTab extends PluginSettingTab {
 						this.cssElement.sheet.insertRule(`:root {
 							--dtcolor: ${newColor};
 						}`, this.cssElement.sheet.cssRules.length);
+						// noinspection JSIgnoredPromiseFromCall
 						this.saveChanges(this.settings);
 					});
 				colorSett = cp;
@@ -683,6 +666,7 @@ class DefinitionListSettingTab extends PluginSettingTab {
 					this.cssElement.sheet.insertRule(`:root {
 						--dtweight: ${newWeight ? 'bold' : 'inherit'
 					}`, this.cssElement.sheet.cssRules.length);
+					// noinspection JSIgnoredPromiseFromCall
 					this.saveChanges(this.settings);
 				})
 				weightSett = tog;
@@ -698,6 +682,7 @@ class DefinitionListSettingTab extends PluginSettingTab {
 						this.cssElement.sheet.insertRule(`:root {
 						--dtstyle: ${newStyle ? 'italic' : 'inherit'
 						}`, this.cssElement.sheet.cssRules.length);
+						// noinspection JSIgnoredPromiseFromCall
 						this.saveChanges(this.settings);
 					})
 				styleSett = tog;
@@ -716,6 +701,7 @@ class DefinitionListSettingTab extends PluginSettingTab {
 						this.cssElement.sheet.insertRule(`:root {
 							--ddindentation: ${value}px;
 						}`, this.cssElement.sheet.cssRules.length);
+						// noinspection JSIgnoredPromiseFromCall
 						this.saveChanges(this.settings);
 					});
 				indentSett = sl;
@@ -724,7 +710,7 @@ class DefinitionListSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.addButton(bt => bt.setButtonText('Reset to defaults')
 				.setTooltip('Color: dark blue, #555577\nIndentation: 30 pixels')
-				.onClick(evt => {
+				.onClick(() => {
 					colorSett.setValue(defaultSettings.dtcolor);
 					weightSett.setValue(defaultSettings.dtbold);
 					styleSett.setValue(defaultSettings.dtitalic);

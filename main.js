@@ -214,7 +214,7 @@ class DocumentDecorationEngine {
         if (update.state.doc.lines !== this.numberOfLines)
             return this.decorateVisibleRangesFromScratch(update);
         let fullRedecorationRequired = false;
-        update.changes.iterChangedRanges((f0, t0, f1, t1) => {
+        update.changes.iterChangedRanges((f0, _t0, f1, t1) => {
             if (fullRedecorationRequired)
                 return;
             const line = update.state.doc.lineAt(f1);
@@ -224,7 +224,8 @@ class DocumentDecorationEngine {
                 fullRedecorationRequired = true;
                 return;
             }
-            for (var i = this.lineBlocks.length - 1; i >= 0; i--)
+            let i = this.lineBlocks.length - 1;
+            for (; i >= 0; i--)
                 if (this.lineBlocks[i].firstLine <= line.number)
                     break;
             const currentBlock = this.lineBlocks[i];
@@ -245,7 +246,7 @@ class DocumentDecorationEngine {
                             this.DEF_DEC.range(line.from),
                             this.MARKER_DEC.range(line.from, line.from + MARKER_LEN)
                         ],
-                        filter: (f, t, d) => (this.TERM_CLASS !== d.spec.class),
+                        filter: (_f, _t, d) => (this.TERM_CLASS !== d.spec.class),
                         filterFrom: line.from,
                         filterTo: line.to
                     });
@@ -257,7 +258,7 @@ class DocumentDecorationEngine {
                         return;
                     }
                     this.decorations = this.decorations.update({
-                        filter: (f, t, d) => ![this.MARKER_CLASS, this.DEF_CLASS].includes(d.spec.class),
+                        filter: (_f, _t, d) => ![this.MARKER_CLASS, this.DEF_CLASS].includes(d.spec.class),
                         filterFrom: line.from,
                         filterTo: line.to,
                         add: [this.TERM_DEC.range(line.from)]
@@ -270,7 +271,7 @@ class DocumentDecorationEngine {
                     currentBlock.listLines.push(line.number);
                     this.decorations = this.decorations.update({
                         add: [this.DD_LIST_DEC.range(line.from)],
-                        filter: (f, t, d) => (this.TERM_CLASS !== d.spec.class),
+                        filter: (_f, _t, d) => (this.TERM_CLASS !== d.spec.class),
                         filterFrom: line.from,
                         filterTo: line.to
                     });
@@ -278,7 +279,7 @@ class DocumentDecorationEngine {
                 else {
                     currentBlock.listLines.remove(line.number);
                     this.decorations = this.decorations.update({
-                        filter: (f, t, d) => (this.DD_LIST_CLASS !== d.spec.class),
+                        filter: (_f, _t, d) => (this.DD_LIST_CLASS !== d.spec.class),
                         filterFrom: line.from,
                         filterTo: line.to,
                         add: [this.TERM_DEC.range(line.from)]
@@ -311,7 +312,7 @@ class DocumentDecorationEngine {
     }
 }
 const liveUpdateDefinitionLists = view.ViewPlugin.fromClass(DocumentDecorationEngine, { decorations: dde => dde.decorations });
-const postProcessDefinitionLists = function (element, context) {
+const postProcessDefinitionLists = function (element) {
     if (!element.classList.contains('el-p') &&
         !element.classList.contains('el-ul') &&
         !element.classList.contains('el-ol') &&
@@ -340,33 +341,35 @@ const postProcessDefinitionLists = function (element, context) {
             listItems = element.findAll('scope: > div > * > li')
                 .filter(li => li.innerHTML.match(definitionMarker));
         }
+        let startOfLine;
+        let itemElement;
+        function insertClonedNode(node, defList) {
+            if ('tagName' in node && node.tagName === "BR") {
+                startOfLine = true;
+                return;
+            }
+            const clone = node.cloneNode(true);
+            if (startOfLine) {
+                if (node.textContent.match(definitionMarker)) {
+                    itemElement = defList.createEl('dd');
+                    clone.textContent = node.textContent.slice(4);
+                }
+                else if (node.textContent.length <= MAX_TERM_LEN) {
+                    itemElement = defList.createEl('dt');
+                }
+                else {
+                    itemElement = defList.createEl('p');
+                }
+                startOfLine = false;
+            }
+            itemElement.append(clone);
+        }
         paragraphs.forEach((par) => {
             if (!preCheckedPar && !par.innerHTML.match(definitionMarker))
                 return;
             const defList = document.createElement('dl');
-            let startOfLine = true;
-            let itemElement;
-            par.childNodes.forEach(node => {
-                if ('tagName' in node && node.tagName === "BR") {
-                    startOfLine = true;
-                    return;
-                }
-                const clone = node.cloneNode(true);
-                if (startOfLine) {
-                    if (node.textContent.match(definitionMarker)) {
-                        itemElement = defList.createEl('dd');
-                        clone.textContent = node.textContent.slice(4);
-                    }
-                    else if (node.textContent.length <= MAX_TERM_LEN) {
-                        itemElement = defList.createEl('dt');
-                    }
-                    else {
-                        itemElement = defList.createEl('p');
-                    }
-                    startOfLine = false;
-                }
-                itemElement.append(clone);
-            });
+            startOfLine = true;
+            par.childNodes.forEach(node => insertClonedNode(node, defList));
             par.replaceWith(defList);
         });
         listItems.forEach(li => {
@@ -377,29 +380,8 @@ const postProcessDefinitionLists = function (element, context) {
             li.parentElement.insertAdjacentElement('afterend', defList);
             const virtual = document.createElement('div');
             virtual.innerHTML = originalHTML.slice(newlinePos + 1);
-            let itemElement;
-            let startOfLine = true;
-            virtual.childNodes.forEach(node => {
-                if ('tagName' in node && node.tagName === "BR") {
-                    startOfLine = true;
-                    return;
-                }
-                const clone = node.cloneNode(true);
-                if (startOfLine) {
-                    if (node.textContent.match(definitionMarker)) {
-                        itemElement = defList.createEl('dd');
-                        clone.textContent = node.textContent.slice(4);
-                    }
-                    else if (node.textContent.length <= MAX_TERM_LEN) {
-                        itemElement = defList.createEl('dt');
-                    }
-                    else {
-                        itemElement = defList.createEl('p');
-                    }
-                    startOfLine = false;
-                }
-                itemElement.append(clone);
-            });
+            startOfLine = true;
+            virtual.childNodes.forEach(node => insertClonedNode(node, defList));
             if (!li.nextElementSibling)
                 return;
             const newList = li.parentElement.cloneNode(false);
@@ -505,7 +487,7 @@ class DefinitionListSettingTab extends obsidian.PluginSettingTab {
         new obsidian.Setting(containerEl)
             .addButton(bt => bt.setButtonText('Reset to defaults')
             .setTooltip('Color: dark blue, #555577\nIndentation: 30 pixels')
-            .onClick(evt => {
+            .onClick(() => {
             colorSett.setValue(defaultSettings.dtcolor);
             weightSett.setValue(defaultSettings.dtbold);
             styleSett.setValue(defaultSettings.dtitalic);
