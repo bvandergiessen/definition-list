@@ -52,8 +52,8 @@ const defaultSettings: DefinitionListPluginSettings = {
 	dtitalic: false,
 	ddindentation: 30
 }
-const definitionMarker: RegExp = /(?:^|\n): {3}/;
 const MARKER: string = ':   ';
+const MARKER_REGEX: RegExp = /(?:^|\n): {3}/;
 const MARKER_LEN: number = MARKER.length;
 const MAX_TERM_LEN: number = 100;
 
@@ -66,11 +66,26 @@ export default class DefinitionListPlugin extends Plugin {
 	async onload() {
 		console.log(`Loading plugin ${this.manifest.name} v${this.manifest.version}`);
 		this.settings = Object.assign({}, defaultSettings, await this.loadData());
+		/* Measure the width of the definition marker ':   ' for correct indentation.
+		 * It's about 18 pixels, but the value depends on the user's choice of font.
+		 * It is advised to use EditorView.requestMeasure() for such things, but that
+		 * fails when no document is currently open, which may well be the case at the
+		 * time of loading of the plugin (i.e. usually when Obsidian starts). */
+		const sizerContainer: HTMLDivElement =
+			this.app.workspace.containerEl.createEl('div', {cls: 'markdown-preview-view'});
+			// this class ensures the font is the one used in the editing area
+		const sizer: HTMLSpanElement = sizerContainer.createEl('span', {
+			text: MARKER,
+			attr: {style: "visibility: hidden; white-space: pre;"}
+		});
+		const markerWidth: number = Math.round(sizer.getBoundingClientRect()?.width || 18);
+		sizerContainer.remove();
 		this.cssElement.textContent = `:root {
 			--dtcolor: ${this.settings.dtcolor};
 			--dtweight: ${this.settings.dtbold ? 'bold' : 'inherit'};
 			--dtstyle: ${this.settings.dtitalic ? 'italic' : 'inherit'};
-			--ddindentation: ${this.settings.ddindentation}px;	
+			--ddindentation: ${this.settings.ddindentation}px;
+			--ddmarkerindent: -${markerWidth}px;
 		}`;
 		document.head.appendChild(this.cssElement);
 		this.registerEditorExtension(liveUpdateDefinitionLists);
@@ -180,7 +195,6 @@ class DocumentDecorationEngine implements PluginValue {
 			// update.changes.iterChanges(console.debug, true);
 			return this.adjustDecorationsAfterEdit(update);
 		}
-		// TODO: requestMeasure to set CSS for first-line indent
 	}
 
 	decorateVisibleRangesFromScratch(update: ViewUpdate) {
@@ -504,7 +518,7 @@ const postProcessDefinitionLists: MarkdownPostProcessor = function(element): Pro
 	let preCheckedPar: boolean = false,
 	    preCheckedList: boolean = false;
 	if (element.classList.contains('el-p')) { // Reading View paragraph
-		if (!element.firstElementChild.innerHTML.match(definitionMarker))
+		if (!element.firstElementChild.innerHTML.match(MARKER_REGEX))
 			return;
 		// console.debug('Now we will create the modified paragraph:');
 		// console.debug(element.textContent);
@@ -512,7 +526,7 @@ const postProcessDefinitionLists: MarkdownPostProcessor = function(element): Pro
 	}
 	else if (element.classList.contains('el-ul') || element.classList.contains('el-ol')) {
 		// list: see if any newlines are inside, which may indicate definition lists
-		if (!element.findAll('li').find(li => li.innerHTML.match(definitionMarker)))
+		if (!element.findAll('li').find(li => li.innerHTML.match(MARKER_REGEX)))
 			return;
 		preCheckedList = true;
 	}
@@ -528,11 +542,11 @@ const postProcessDefinitionLists: MarkdownPostProcessor = function(element): Pro
 			paragraphs = [element.lastElementChild as HTMLParagraphElement];
 		else if (preCheckedList)
 			listItems = element.findAll('ul > li, ol > li')
-				.filter(li => li.innerHTML.match(definitionMarker));
+				.filter(li => li.innerHTML.match(MARKER_REGEX));
 		else {
 			paragraphs = element.findAll(':scope > div > p') as HTMLParagraphElement[];
 			listItems = element.findAll('scope: > div > * > li')
-				.filter(li => li.innerHTML.match(definitionMarker));
+				.filter(li => li.innerHTML.match(MARKER_REGEX));
 		}
 		// function needed both for paragraphs and lists:
 		let startOfLine: boolean;
@@ -544,7 +558,7 @@ const postProcessDefinitionLists: MarkdownPostProcessor = function(element): Pro
 			}
 			const clone = node.cloneNode(true);
 			if (startOfLine) {
-				if (node.textContent.match(definitionMarker)) {
+				if (node.textContent.match(MARKER_REGEX)) {
 					itemElement = defList.createEl('dd');
 					clone.textContent = node.textContent.slice(4);
 				}
@@ -561,7 +575,7 @@ const postProcessDefinitionLists: MarkdownPostProcessor = function(element): Pro
 		}
 
 		paragraphs.forEach((par: HTMLParagraphElement) => {
-			if (!preCheckedPar && !par.innerHTML.match(definitionMarker)) return;
+			if (!preCheckedPar && !par.innerHTML.match(MARKER_REGEX)) return;
 
 			// create the <dl> element that is to replace the paragraph element
 			const defList: HTMLDListElement = document.createElement('dl');
@@ -575,7 +589,7 @@ const postProcessDefinitionLists: MarkdownPostProcessor = function(element): Pro
 
 		listItems.forEach(li => {
 			const originalHTML: string = li.innerHTML;
-			const newlinePos: number = originalHTML.match(definitionMarker).index;
+			const newlinePos: number = originalHTML.match(MARKER_REGEX).index;
 			// if this is the last <li>, only create the <dl> after the list;
 			// if not, create the <dl> and after it another list for the remaining <li>s
 			li.innerHTML = originalHTML.slice(0, newlinePos);

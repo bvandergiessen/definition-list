@@ -41,8 +41,8 @@ const defaultSettings = {
     dtitalic: false,
     ddindentation: 30
 };
-const definitionMarker = /(?:^|\n): {3}/;
 const MARKER = ':   ';
+const MARKER_REGEX = /(?:^|\n): {3}/;
 const MARKER_LEN = MARKER.length;
 const MAX_TERM_LEN = 100;
 class DefinitionListPlugin extends obsidian.Plugin {
@@ -51,14 +51,23 @@ class DefinitionListPlugin extends obsidian.Plugin {
         this.cssElement = document.createElement('style');
     }
     onload() {
+        var _a;
         return __awaiter(this, void 0, void 0, function* () {
             console.log(`Loading plugin ${this.manifest.name} v${this.manifest.version}`);
             this.settings = Object.assign({}, defaultSettings, yield this.loadData());
+            const sizerContainer = this.app.workspace.containerEl.createEl('div', { cls: 'markdown-preview-view' });
+            const sizer = sizerContainer.createEl('span', {
+                text: MARKER,
+                attr: { style: "visibility: hidden; white-space: pre;" }
+            });
+            const markerWidth = Math.round(((_a = sizer.getBoundingClientRect()) === null || _a === void 0 ? void 0 : _a.width) || 18);
+            sizerContainer.remove();
             this.cssElement.textContent = `:root {
 			--dtcolor: ${this.settings.dtcolor};
 			--dtweight: ${this.settings.dtbold ? 'bold' : 'inherit'};
 			--dtstyle: ${this.settings.dtitalic ? 'italic' : 'inherit'};
-			--ddindentation: ${this.settings.ddindentation}px;	
+			--ddindentation: ${this.settings.ddindentation}px;
+			--ddmarkerindent: -${markerWidth}px;
 		}`;
             document.head.appendChild(this.cssElement);
             this.registerEditorExtension(liveUpdateDefinitionLists);
@@ -320,12 +329,12 @@ const postProcessDefinitionLists = function (element) {
         return;
     let preCheckedPar = false, preCheckedList = false;
     if (element.classList.contains('el-p')) {
-        if (!element.firstElementChild.innerHTML.match(definitionMarker))
+        if (!element.firstElementChild.innerHTML.match(MARKER_REGEX))
             return;
         preCheckedPar = true;
     }
     else if (element.classList.contains('el-ul') || element.classList.contains('el-ol')) {
-        if (!element.findAll('li').find(li => li.innerHTML.match(definitionMarker)))
+        if (!element.findAll('li').find(li => li.innerHTML.match(MARKER_REGEX)))
             return;
         preCheckedList = true;
     }
@@ -335,11 +344,11 @@ const postProcessDefinitionLists = function (element) {
             paragraphs = [element.lastElementChild];
         else if (preCheckedList)
             listItems = element.findAll('ul > li, ol > li')
-                .filter(li => li.innerHTML.match(definitionMarker));
+                .filter(li => li.innerHTML.match(MARKER_REGEX));
         else {
             paragraphs = element.findAll(':scope > div > p');
             listItems = element.findAll('scope: > div > * > li')
-                .filter(li => li.innerHTML.match(definitionMarker));
+                .filter(li => li.innerHTML.match(MARKER_REGEX));
         }
         let startOfLine;
         let itemElement;
@@ -350,7 +359,7 @@ const postProcessDefinitionLists = function (element) {
             }
             const clone = node.cloneNode(true);
             if (startOfLine) {
-                if (node.textContent.match(definitionMarker)) {
+                if (node.textContent.match(MARKER_REGEX)) {
                     itemElement = defList.createEl('dd');
                     clone.textContent = node.textContent.slice(4);
                 }
@@ -365,7 +374,7 @@ const postProcessDefinitionLists = function (element) {
             itemElement.append(clone);
         }
         paragraphs.forEach((par) => {
-            if (!preCheckedPar && !par.innerHTML.match(definitionMarker))
+            if (!preCheckedPar && !par.innerHTML.match(MARKER_REGEX))
                 return;
             const defList = document.createElement('dl');
             startOfLine = true;
@@ -374,7 +383,7 @@ const postProcessDefinitionLists = function (element) {
         });
         listItems.forEach(li => {
             const originalHTML = li.innerHTML;
-            const newlinePos = originalHTML.match(definitionMarker).index;
+            const newlinePos = originalHTML.match(MARKER_REGEX).index;
             li.innerHTML = originalHTML.slice(0, newlinePos);
             const defList = document.createElement('dl');
             li.parentElement.insertAdjacentElement('afterend', defList);
