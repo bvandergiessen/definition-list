@@ -56,6 +56,7 @@ const MARKER: string = ':   ';
 const MARKER_REGEX: RegExp = /(?:^|\n): {3}/;
 const MARKER_LEN: number = MARKER.length;
 const MAX_TERM_LEN: number = 100;
+let verbose: boolean = false;
 
 /* 1. The main class, instantiated by Obsidian when the plugin loads */
 // noinspection JSUnusedGlobalSymbols
@@ -92,7 +93,12 @@ export default class DefinitionListPlugin extends Plugin {
 		this.registerMarkdownPostProcessor(postProcessDefinitionLists, 99);
 		this.addSettingTab(new DefinitionListSettingTab(this.app, this));
 	}
-
+	/* In Obsidian's developer tools, turn debugging messages on or off with
+	 *  `app.plugins.getPlugin('definition-list').toggleDebugging()` */
+	public toggleDebugging(on: boolean|null) {
+		verbose = on ?? !verbose;
+		console.debug('[DL] debugging', verbose ? 'on' : 'off');
+	}
 	onunload() {
 		console.log(`Unloading plugin ${this.manifest.name}`);
 		if (this.cssElement) this.cssElement.remove();
@@ -149,7 +155,7 @@ class DocumentDecorationEngine implements PluginValue {
 
 	constructor(view: EditorView) {
 		this.decorations = Decoration.none;
-		console.debug(`live updater for ${view.state.doc.line(1).text} started`);
+		verbose && console.debug(`[DL] live updater for ${view.state.doc.line(1).text} started`);
 	}
 
 	/* the boolean ViewUpdate properties that may be useful:
@@ -173,25 +179,24 @@ class DocumentDecorationEngine implements PluginValue {
      * this class => use the constructor for this
      */
 	update(update: ViewUpdate) {
-		// for (let u of ['selectionSet', 'docChanged', 'geometryChanged', 'focusChanged',
-		// 	'heightChanged', 'viewportMoved', 'viewportChanged'])
-		// 	if ((update as any)[u])
-		// 		console.debug(u);
+		for (let u of ['selectionSet', 'docChanged', 'geometryChanged', 'focusChanged',
+			'heightChanged', 'viewportMoved', 'viewportChanged'])
+			if ((update as any)[u])
+				verbose && console.debug('[DL]', u);
 
 		if (!update.viewportChanged && !this.never_updated) {
 			return;
 		}
-		// console.debug(new Date().toTimeString());
 
 		/* Big scroll => whole DecorationSet from scratch; perhaps some of it can be
          * de-duplicated? Also runs the first time Edit View is active. */
 		if (update.viewportMoved ||
 			(this.never_updated && update.view.contentDOM.isShown())) {
-			// console.debug(update.viewportChanged ? 'viewportMoved' : 'first update');
+			verbose && console.debug(update.viewportChanged ? '[DL] viewportMoved' : '[DL] first update');
 			return this.decorateVisibleRangesFromScratch(update);
 		}
 		if (update.docChanged) {
-			// console.debug('docChanged');
+			verbose && console.debug('[DL] docChanged');
 			// update.changes.iterChanges(console.debug, true);
 			return this.adjustDecorationsAfterEdit(update);
 		}
@@ -201,7 +206,7 @@ class DocumentDecorationEngine implements PluginValue {
 		const docText = update.state.doc;
 		this.numberOfLines = docText.lines;
 		const tree: Tree = syntaxTree(update.state);  // to check line types
-		// console.debug(tree);
+		verbose && console.debug('[DL]', tree);
 		this.lineBlocks.splice(0);
 		let currentBlock: blockOfLines;
 		let lnr: number;
@@ -210,7 +215,7 @@ class DocumentDecorationEngine implements PluginValue {
 			/* multiple ranges are always in document order, but the border
 			 * between them may fall within a line. NB A range border
 			 * may fall inside special blocks (code, table, formula)! */
-			// console.debug('Range:', range);
+			verbose && console.debug('[DL] Range:', range);
 			lnr = docText.lineAt(range.from).number;
 			if (this.lineBlocks.length)
 				currentBlock = this.lineBlocks.last();
@@ -225,7 +230,7 @@ class DocumentDecorationEngine implements PluginValue {
 			for (; lnr <= docText.lineAt(range.to).number; lnr++) {
 				const line: Line = docText.line(lnr);
 				const lineType: lineType = this.lineType(line.from, tree);
-				// console.debug(`${lnr}: ${lineType}`);
+				verbose && console.debug(`[DL] ${lnr}: ${lineType}`);
 				switch (lineType) {
 					case 'blockStart':
 						if (currentBlock.firstLine !== lnr) {
@@ -280,7 +285,7 @@ class DocumentDecorationEngine implements PluginValue {
 				}
 			}
 		}
-		// console.debug(lnr, this.lineBlocks);
+		verbose && console.debug('[DL]', lnr, this.lineBlocks);
 
 		/* 3. Go through each definition-list block and set the formatting of every line. */
 		const newDecorations: Range<Decoration>[] = [];
@@ -304,7 +309,7 @@ class DocumentDecorationEngine implements PluginValue {
 				// empty lines and very long lines get no decoration
 			}
 		}
-		// console.debug(newDecorations);
+		verbose && console.debug('[DL]', newDecorations);
 		/* the argument for .update is of class RangeSetUpdate<Decoration>,
 		* and RangeSetUpdate is a typedef of an Object with optional
 		* property .add of class readonly Range<Decoration>; that in turn has
@@ -443,11 +448,15 @@ class DocumentDecorationEngine implements PluginValue {
 		/* Note that the syntaxTree is a lot "flatter" than you'd expect: a
 		 * code block is not one node with subnodes but a bunch of consecutive
 		 * nodes in the tree. So the real syntax TREE is hidden from us.
-		 * Note that the number node.type.id for a particular type is different
+		 * Note that the number node.type.id (≠1) for a particular type is different
 		 * at every run of Obsidian, so .id can't be used with consistency */
+		/* Also note that the tree parser seems to have a bug: it sometimes says
+		 * that a list item is a node of type "Document" (1) whereas it
+		 * should be formatting_formatting-list_formatting-list-ul_list-1.
+		 * This leads to incorrect rendering (as a definition-list term) */
 		let node = tree.resolveStack(pos, 1);
 		while (node) {
-			// console.debug(node.node?.name, node.node?.type?.id);
+			verbose && console.debug(`[DL] ${node.node?.name} (${node.node?.type?.id})`);
 			if (node.node?.type?.id === 1)
 				return 'normal';
 			const name = node.node!.name.replace(/\d/g, '');
@@ -500,7 +509,7 @@ const postProcessDefinitionLists: MarkdownPostProcessor = function(element): Pro
      * terms and definitions are absorbed in one <li> list item, so we need to
      * extract them, potentially split up the list, and create a <dl> for them */
 
-	// console.debug(element.outerHTML);
+	verbose && console.debug('[DL]', element.outerHTML);
 
 	/* In Reading View, the element passed in IS a single <div>;
 	 * in PDF output, it is the PARENT ELEMENT of all the <div>s.
@@ -520,14 +529,14 @@ const postProcessDefinitionLists: MarkdownPostProcessor = function(element): Pro
 	if (element.classList.contains('el-p')) { // Reading View paragraph
 		if (!element.firstElementChild.innerHTML.match(MARKER_REGEX))
 			return;
-		// console.debug('Now we will create the modified paragraph:');
-		// console.debug(element.textContent);
+		verbose && console.debug('[DL] Creating modified version of paragraph');
 		preCheckedPar = true;
 	}
 	else if (element.classList.contains('el-ul') || element.classList.contains('el-ol')) {
 		// list: see if any newlines are inside, which may indicate definition lists
 		if (!element.findAll('li').find(li => li.innerHTML.match(MARKER_REGEX)))
 			return;
+		verbose && console.debug('[DL] Creating modified version of list item');
 		preCheckedList = true;
 	}
 
@@ -545,7 +554,7 @@ const postProcessDefinitionLists: MarkdownPostProcessor = function(element): Pro
 				.filter(li => li.innerHTML.match(MARKER_REGEX));
 		else {
 			paragraphs = element.findAll(':scope > div > p') as HTMLParagraphElement[];
-			listItems = element.findAll('scope: > div > * > li')
+			listItems = element.findAll(':scope > div > * > li')
 				.filter(li => li.innerHTML.match(MARKER_REGEX));
 		}
 		// function needed both for paragraphs and lists:
@@ -589,7 +598,7 @@ const postProcessDefinitionLists: MarkdownPostProcessor = function(element): Pro
 
 		listItems.forEach(li => {
 			const originalHTML: string = li.innerHTML;
-			const newlinePos: number = originalHTML.match(MARKER_REGEX).index;
+			const newlinePos: number = originalHTML.match('<br>\n').index;
 			// if this is the last <li>, only create the <dl> after the list;
 			// if not, create the <dl> and after it another list for the remaining <li>s
 			li.innerHTML = originalHTML.slice(0, newlinePos);
@@ -598,7 +607,7 @@ const postProcessDefinitionLists: MarkdownPostProcessor = function(element): Pro
 
 			// clone the contents of the <li> after newline to the <dl>
 			const virtual: HTMLDivElement = document.createElement('div');
-			virtual.innerHTML = originalHTML.slice(newlinePos+1);
+			virtual.innerHTML = originalHTML.slice(newlinePos+4);
 			startOfLine = true;
 			virtual.childNodes.forEach(node => insertClonedNode(node, defList));
 			if (!li.nextElementSibling)
@@ -658,7 +667,7 @@ class DefinitionListSettingTab extends PluginSettingTab {
 			.addColorPicker(cp => {
 				cp.setValue(this.settings.dtcolor)
 					.onChange(newColor => {
-						console.debug('color set to', newColor);
+						verbose && console.debug('[DL] color set to', newColor);
 						this.settings.dtcolor = newColor;
 						this.cssElement.sheet.insertRule(`:root {
 							--dtcolor: ${newColor};
@@ -675,7 +684,7 @@ class DefinitionListSettingTab extends PluginSettingTab {
 			.addToggle(tog => {
 				tog.setValue(this.settings.dtbold)
 				.onChange(newWeight => {
-					console.debug('bold set to', newWeight);
+					verbose && console.debug('[DL] bold set to', newWeight);
 					this.settings.dtbold = newWeight;
 					this.cssElement.sheet.insertRule(`:root {
 						--dtweight: ${newWeight ? 'bold' : 'inherit'
@@ -691,7 +700,7 @@ class DefinitionListSettingTab extends PluginSettingTab {
 			.addToggle(tog => {
 				tog.setValue(this.settings.dtitalic)
 					.onChange(newStyle => {
-						console.debug('italic set to', newStyle);
+						verbose && console.debug('[DL] italic set to', newStyle);
 						this.settings.dtitalic = newStyle;
 						this.cssElement.sheet.insertRule(`:root {
 						--dtstyle: ${newStyle ? 'italic' : 'inherit'
@@ -710,7 +719,7 @@ class DefinitionListSettingTab extends PluginSettingTab {
 					.setValue(this.settings.ddindentation)
 					.setDynamicTooltip()
 					.onChange(value => {
-						console.debug('indentation set to', value, 'px');
+						verbose && console.debug('[DL] indentation set to', value, 'px');
 						this.settings.ddindentation = value;
 						this.cssElement.sheet.insertRule(`:root {
 							--ddindentation: ${value}px;

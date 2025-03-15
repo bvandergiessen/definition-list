@@ -1,9 +1,9 @@
 ## Definition list
 
-Create a Definition list. This is a reduced and slightly modified form of the functionality for definition lists of the PHP [Markdown Extra](https://michelf.ca/projects/php-markdown/extra/#def-list) module.
+Create a Definition list, like the `<dl>` element in HTML. This is a reduced and slightly modified form of the functionality for definition lists of the PHP [Markdown Extra](https://michelf.ca/projects/php-markdown/extra/#def-list) module.
 
 ### Usage
-A definition list consists of one or more *term* – *definition* pairs. The term should be entered at the left of the line, without any spaces in front of it. The definition must then be entered on the next line, in the form of a `:` at the start of the line followed by 3 spaces, followed by the definition:
+A definition list consists of one or more *term* – *definition* pairs. The term should be entered at the left of the line. The definition must then be entered on the next line, in the form of a `:` at the start of the line followed by 3 spaces, followed by the definition:
 
 ```
 cryosphere
@@ -17,33 +17,16 @@ ice shelf
 :   ice that has slid into the sea from land
 ```
 
-Two consecutive definition lines are allowed (as in the second item above), and two consecutive terms are allowed too (as in the last item).
-
-The plugin converts this content to a definition list (as in HTML's `<dl>` element).
-
-The example above then looks like
+The plugin displays this as a definition list:
 
 ![Definition list output](doc/Output.png)
 
-### Edge cases
-A few special situations may occur:
+Multiple consecutive definition lines are allowed (as in the second item of the example), and consecutive terms are allowed too (as in the last item).
 
-#### Lone <code>:&nbsp;&nbsp;&nbsp;</code> lines
-Paragraphs that start with the <code>:&nbsp;&nbsp;&nbsp;</code> marker, or consist of a single line that has the marker, are also converted to a `<dl>` element. For example,
+### Start and end of definition list
+A definition list is a block of lines that has at least one definition marker (the <code>:&nbsp;&nbsp;&nbsp;</code>  at the start of the line). It ends at the place of any header, horizontal line, table, blank line, formula block, and so on – the only exception is a *list* (bulleted or numbered), which doesn't end the definition-list block but is absorbed into it.
 
-```
-:   not a term but a definition
-the next term
-:   its definition
-```
-
-is something you wouldn't see in a dictionary but it's still interpreted as *definition, term, definition*. Similarly,
-
-```
-:   a definition on its own
-```
-
-is interpreted as a definition. The reason is that a definition list may sometimes be interrupted by other Markdown constructs, and should be allowed to continue afterwards. An example is a formula inside a definition list:
+For example, to continue the definition list below a formula, there should be definition markers somewhere above and below it:
 
 ```
 half-life
@@ -54,12 +37,11 @@ $$
 :   with $T$ the half-life.
 ```
 
-Here, the final line is not part of the original definition list, which ends where the block formula starts; but it should still be displayed as a definition line:
+Here, the final line is not part of the original definition list, which ends where the block formula starts, but of a new definition list.
 
 ![Definition list output 2](doc/Output2.png)
 
-#### Lists in definitions
-A list (bulleted or numbered) immediately following a definition is indented to the level of the definition (which is normally a bit deeper than the standard list-item indentation). Thus,
+A list (bulleted or numbered) immediately following a definition is taken to be part of the definition. The list gets indented to the level of the definition (normally a bit deeper than the standard list-item indentation). Thus,
 
 ```
 radiative forcing
@@ -72,3 +54,8 @@ radiative forcing
 is rendered as
 
 ![Definition list output 3](doc/Output3.png)
+
+For a complete definition of the syntax, see the file `doc/Specifications.md` in the Github repository of the plugin.
+
+### Settings
+You can configure the formatting of terms and their definitions on the Settings page of the plugin.

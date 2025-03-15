@@ -45,6 +45,7 @@ const MARKER = ':   ';
 const MARKER_REGEX = /(?:^|\n): {3}/;
 const MARKER_LEN = MARKER.length;
 const MAX_TERM_LEN = 100;
+let verbose = false;
 class DefinitionListPlugin extends obsidian.Plugin {
     constructor() {
         super(...arguments);
@@ -74,6 +75,10 @@ class DefinitionListPlugin extends obsidian.Plugin {
             this.registerMarkdownPostProcessor(postProcessDefinitionLists, 99);
             this.addSettingTab(new DefinitionListSettingTab(this.app, this));
         });
+    }
+    toggleDebugging(on) {
+        verbose = on !== null && on !== void 0 ? on : !verbose;
+        console.debug('[DL] debugging', verbose ? 'on' : 'off');
     }
     onunload() {
         console.log(`Unloading plugin ${this.manifest.name}`);
@@ -113,17 +118,23 @@ class DocumentDecorationEngine {
         this.numberOfLines = 1;
         this.lineBlocks = [];
         this.decorations = view.Decoration.none;
-        console.debug(`live updater for ${view$1.state.doc.line(1).text} started`);
+        verbose && console.debug(`[DL] live updater for ${view$1.state.doc.line(1).text} started`);
     }
     update(update) {
+        for (let u of ['selectionSet', 'docChanged', 'geometryChanged', 'focusChanged',
+            'heightChanged', 'viewportMoved', 'viewportChanged'])
+            if (update[u])
+                verbose && console.debug('[DL]', u);
         if (!update.viewportChanged && !this.never_updated) {
             return;
         }
         if (update.viewportMoved ||
             (this.never_updated && update.view.contentDOM.isShown())) {
+            verbose && console.debug(update.viewportChanged ? '[DL] viewportMoved' : '[DL] first update');
             return this.decorateVisibleRangesFromScratch(update);
         }
         if (update.docChanged) {
+            verbose && console.debug('[DL] docChanged');
             return this.adjustDecorationsAfterEdit(update);
         }
     }
@@ -131,11 +142,13 @@ class DocumentDecorationEngine {
         const docText = update.state.doc;
         this.numberOfLines = docText.lines;
         const tree = language.syntaxTree(update.state);
+        verbose && console.debug('[DL]', tree);
         this.lineBlocks.splice(0);
         let currentBlock;
         let lnr;
         let inContiguousBlock = false;
         for (let range of update.view.visibleRanges) {
+            verbose && console.debug('[DL] Range:', range);
             lnr = docText.lineAt(range.from).number;
             if (this.lineBlocks.length)
                 currentBlock = this.lineBlocks.last();
@@ -146,6 +159,7 @@ class DocumentDecorationEngine {
             for (; lnr <= docText.lineAt(range.to).number; lnr++) {
                 const line = docText.line(lnr);
                 const lineType = this.lineType(line.from, tree);
+                verbose && console.debug(`[DL] ${lnr}: ${lineType}`);
                 switch (lineType) {
                     case 'blockStart':
                         if (currentBlock.firstLine !== lnr) {
@@ -198,6 +212,7 @@ class DocumentDecorationEngine {
                 }
             }
         }
+        verbose && console.debug('[DL]', lnr, this.lineBlocks);
         const newDecorations = [];
         for (let i = 0; i < this.lineBlocks.length; i++) {
             if (this.lineBlocks[i].special || !this.lineBlocks[i].defMarkers.length)
@@ -215,6 +230,7 @@ class DocumentDecorationEngine {
                     newDecorations.push(this.TERM_DEC.range(line.from));
             }
         }
+        verbose && console.debug('[DL]', newDecorations);
         this.decorations = state.RangeSet.of(newDecorations);
         this.never_updated = false;
     }
@@ -300,10 +316,11 @@ class DocumentDecorationEngine {
             this.decorateVisibleRangesFromScratch(update);
     }
     lineType(pos, tree) {
-        var _a, _b;
+        var _a, _b, _c, _d, _e;
         let node = tree.resolveStack(pos, 1);
         while (node) {
-            if (((_b = (_a = node.node) === null || _a === void 0 ? void 0 : _a.type) === null || _b === void 0 ? void 0 : _b.id) === 1)
+            verbose && console.debug(`[DL] ${(_a = node.node) === null || _a === void 0 ? void 0 : _a.name} (${(_c = (_b = node.node) === null || _b === void 0 ? void 0 : _b.type) === null || _c === void 0 ? void 0 : _c.id})`);
+            if (((_e = (_d = node.node) === null || _d === void 0 ? void 0 : _d.type) === null || _e === void 0 ? void 0 : _e.id) === 1)
                 return 'normal';
             const name = node.node.name.replace(/\d/g, '');
             if (this.BLOCK_START_TYPES.contains(name))
@@ -322,6 +339,7 @@ class DocumentDecorationEngine {
 }
 const liveUpdateDefinitionLists = view.ViewPlugin.fromClass(DocumentDecorationEngine, { decorations: dde => dde.decorations });
 const postProcessDefinitionLists = function (element) {
+    verbose && console.debug('[DL]', element.outerHTML);
     if (!element.classList.contains('el-p') &&
         !element.classList.contains('el-ul') &&
         !element.classList.contains('el-ol') &&
@@ -331,11 +349,13 @@ const postProcessDefinitionLists = function (element) {
     if (element.classList.contains('el-p')) {
         if (!element.firstElementChild.innerHTML.match(MARKER_REGEX))
             return;
+        verbose && console.debug('[DL] Creating modified version of paragraph');
         preCheckedPar = true;
     }
     else if (element.classList.contains('el-ul') || element.classList.contains('el-ol')) {
         if (!element.findAll('li').find(li => li.innerHTML.match(MARKER_REGEX)))
             return;
+        verbose && console.debug('[DL] Creating modified version of list item');
         preCheckedList = true;
     }
     return new Promise((resultCallback) => {
@@ -347,7 +367,7 @@ const postProcessDefinitionLists = function (element) {
                 .filter(li => li.innerHTML.match(MARKER_REGEX));
         else {
             paragraphs = element.findAll(':scope > div > p');
-            listItems = element.findAll('scope: > div > * > li')
+            listItems = element.findAll(':scope > div > * > li')
                 .filter(li => li.innerHTML.match(MARKER_REGEX));
         }
         let startOfLine;
@@ -383,12 +403,12 @@ const postProcessDefinitionLists = function (element) {
         });
         listItems.forEach(li => {
             const originalHTML = li.innerHTML;
-            const newlinePos = originalHTML.match(MARKER_REGEX).index;
+            const newlinePos = originalHTML.match('<br>\n').index;
             li.innerHTML = originalHTML.slice(0, newlinePos);
             const defList = document.createElement('dl');
             li.parentElement.insertAdjacentElement('afterend', defList);
             const virtual = document.createElement('div');
-            virtual.innerHTML = originalHTML.slice(newlinePos + 1);
+            virtual.innerHTML = originalHTML.slice(newlinePos + 4);
             startOfLine = true;
             virtual.childNodes.forEach(node => insertClonedNode(node, defList));
             if (!li.nextElementSibling)
@@ -438,7 +458,7 @@ class DefinitionListSettingTab extends obsidian.PluginSettingTab {
             .addColorPicker(cp => {
             cp.setValue(this.settings.dtcolor)
                 .onChange(newColor => {
-                console.debug('color set to', newColor);
+                verbose && console.debug('[DL] color set to', newColor);
                 this.settings.dtcolor = newColor;
                 this.cssElement.sheet.insertRule(`:root {
 							--dtcolor: ${newColor};
@@ -453,7 +473,7 @@ class DefinitionListSettingTab extends obsidian.PluginSettingTab {
             .addToggle(tog => {
             tog.setValue(this.settings.dtbold)
                 .onChange(newWeight => {
-                console.debug('bold set to', newWeight);
+                verbose && console.debug('[DL] bold set to', newWeight);
                 this.settings.dtbold = newWeight;
                 this.cssElement.sheet.insertRule(`:root {
 						--dtweight: ${newWeight ? 'bold' : 'inherit'}`, this.cssElement.sheet.cssRules.length);
@@ -467,7 +487,7 @@ class DefinitionListSettingTab extends obsidian.PluginSettingTab {
             .addToggle(tog => {
             tog.setValue(this.settings.dtitalic)
                 .onChange(newStyle => {
-                console.debug('italic set to', newStyle);
+                verbose && console.debug('[DL] italic set to', newStyle);
                 this.settings.dtitalic = newStyle;
                 this.cssElement.sheet.insertRule(`:root {
 						--dtstyle: ${newStyle ? 'italic' : 'inherit'}`, this.cssElement.sheet.cssRules.length);
@@ -484,7 +504,7 @@ class DefinitionListSettingTab extends obsidian.PluginSettingTab {
                 .setValue(this.settings.ddindentation)
                 .setDynamicTooltip()
                 .onChange(value => {
-                console.debug('indentation set to', value, 'px');
+                verbose && console.debug('[DL] indentation set to', value, 'px');
                 this.settings.ddindentation = value;
                 this.cssElement.sheet.insertRule(`:root {
 							--ddindentation: ${value}px;
